@@ -1,0 +1,18 @@
+[package]
+name = "sui_twitter_db"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+clap = { version = "4.0.30", features = ["derive"] }
+rand = { version = "0.8.5" }
+base64 = "0.20.0"
+url = "2.3.1"
+percent-encoding = "2.2.0"
+hmac = "0.12.1"
+sha1 = "0.10.5"
+reqwest = { version = "0.11", features = ["json", "blocking"] }

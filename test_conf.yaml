@@ -1,0 +1,7 @@
+oauth_consumer_key: "xvz1evFS4wEEPTGEFPHBog"
+oauth_consumer_secret: "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw"
+oauth_token: "370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb"
+oauth_token_secret: "LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE"
+bearer_token: "aaaabbbb"
+db_path: "./sui.db"
+monitoring_username: ["@suisei", "@miko"]
