@@ -2,6 +2,10 @@ use std::{collections::HashMap};
 
 use serde::{Serialize, Deserialize};
 
+pub trait IdMarked {
+    fn get_id(&self) -> &String;
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct UserDetail {
     pub id: String, 
@@ -11,60 +15,104 @@ pub struct UserDetail {
     pub description: String
 }
 
+impl IdMarked for UserDetail {
+    fn get_id(&self) -> &String {
+        &self.id
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct UserInfo {
     pub data: Vec<UserDetail>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct RefUserDetail {
+#[derive(Debug)]
+pub struct BasicUserDetail {
     pub id: String, 
-    pub name: String, 
     pub username: String, 
+    pub name: String
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct TweetHashTag {
-    start: i8, 
-    end: i8, 
-    tag: String
+impl IdMarked for BasicUserDetail {
+    fn get_id(&self) -> &String {
+        &self.id
+    }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct TweetMention {
-    start: i8, 
-    end: i8, 
-    tag: String,
+#[derive(Debug)]
+pub struct BasicTweet {
+    pub text: String, 
+    pub id: String
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct TweetEntity {
-    annotations: Vec<HashMap<String, String>>, 
-    cashtags: Vec<HashMap<String, String>>, 
-    hashtags: Vec<TweetHashTag>, 
-    mentions: Vec<TweetMention>, 
-    urls: Vec<HashMap<String, String>>
+impl IdMarked for BasicTweet {
+    fn get_id(&self) -> &String {
+        &self.id
+    }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct TweetExpandFields {
-    users: Vec<RefUserDetail>, 
-    tweets: Vec<TweetDetail>,
+#[derive(Debug)]
+pub enum TweetType {
+    tweet, 
+    reply {
+        tweet: BasicTweet, 
+        author: BasicUserDetail
+    }, 
+    retweet {
+       tweet: BasicTweet, 
+       author: BasicUserDetail
+    }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct TweetDetail {
-    id: String, 
-    edit_history_tweet_ids: Vec<String>, 
-    text: String,
-    created_at: String, 
-    referenced_tweets: Vec<HashMap<String, String>>, 
-    entities: TweetEntity
+#[derive(Debug)]
+pub struct FetchedTweet {
+    pub id: String, 
+    pub text: String, 
+    pub created_at: String,
+    pub author_id: String, 
+    pub tweet_type: TweetType,
+    pub hashtags: Option<Vec<String>>, 
+    pub mentions: Option<Vec<BasicUserDetail>>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct TweetInfo {
-    data: Vec<TweetDetail>, 
-    includes: TweetExpandFields,
-    meta: HashMap<String, String>
+impl FetchedTweet {
+    pub fn new() -> FetchedTweet {
+        FetchedTweet{
+            id: String::new(), 
+            text: String::new(), 
+            created_at: String::new(), 
+            author_id: String::new(), 
+            tweet_type: TweetType::tweet, 
+            hashtags: None, 
+            mentions: None,
+        }
+    }
+}
+
+pub fn find_by_id<'a, T: IdMarked>(id: &str, dictionary: &'a Vec<T>) -> Option<&'a T> {
+    dictionary.iter().find(|item| item.get_id()==id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_find_by_id() {
+        let user_dict = vec![
+            BasicUserDetail {
+                id: "1234".to_string(), 
+                name: "abcd".to_string(), 
+                username: "efgh".to_string()
+            }, 
+            BasicUserDetail {
+                id: "0987".to_string(), 
+                name: "zyxw".to_string(), 
+                username: "vuts".to_string()
+            }
+        ];
+
+        let target = "0987";
+        let found_user = find_by_id(target, &user_dict);
+        assert_eq!(&found_user.unwrap().name, "zyxw");
+    }
 }
