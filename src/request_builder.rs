@@ -1,13 +1,13 @@
-use std::{collections::HashMap, fmt::format};
+use std::{collections::HashMap};
 use std::error::Error;
-use reqwest::{blocking::{Client, Response}};
+use reqwest::{blocking::{Client}};
 use serde_json::Value;
 
 
-use crate::errors::InvalidTweetField;
-use crate::query_result;
+use crate::errors::{InvalidTweetField, InvalidUserField};
+use crate::query_result::{self, UserDetail};
 use crate::query_result::{FetchedTweet, BasicUserDetail, TweetType, BasicTweet};
-use crate::{configuration, query_result::UserInfo};
+use crate::{configuration};
 
 pub trait RequestParams {
     fn to_hashmap(&self) -> HashMap<String, String>;
@@ -45,7 +45,7 @@ impl UserInfoFetcher {
         UserInfoFetcher { user_id: user_id.to_string() }
     }
 
-    pub fn fetch(&self, conf: &configuration::Config) -> Result<UserInfo, Box<dyn Error>> {
+    pub fn fetch(&self, conf: &configuration::Config) -> Result<UserDetail, Box<dyn Error>> {
         let client = Client::builder().build().expect("error in client builder");
         let request = 
             client
@@ -57,16 +57,48 @@ impl UserInfoFetcher {
                 "Authorization", 
                 format!("Bearer {}", &conf.bearer_token)
             );
-        let response: UserInfo = request.send()?.json()?;
-        Ok(response)
+        let response = request.send()?.text()?;
+        let raw_user: Value = serde_json::from_str(&response)?;
+        let mut user_detail = UserDetail {
+            id: String::new(), 
+            username: String::new(), 
+            name: String::new(), 
+            location: String::new(), 
+            description: String::new(), 
+        }; 
+        if let Value::Array(user_list) = &raw_user["data"] {
+            let user_entity = &user_list[0];
+            user_detail.id = match &user_entity["id"] {
+                Value::String(id) => id.clone(), 
+                _ => {return Err(Box::new(InvalidUserField::new("id")));}
+            }; 
+            user_detail.username = match &user_entity["username"] {
+                Value::String(username) => username.clone(), 
+                _ => {return Err(Box::new(InvalidUserField::new("username")));}
+            }; 
+            user_detail.name = match &user_entity["name"] {
+                Value::String(name) => name.clone(), 
+                _ => {return Err(Box::new(InvalidUserField::new("name")));}
+            }; 
+            user_detail.location = match &user_entity["location"] {
+                Value::String(location) => location.clone(), 
+                _ => String::new()
+            }; 
+            user_detail.description = match &user_entity["description"] {
+                Value::String(description) => description.clone(), 
+                _ => String::new()
+            }; 
+
+        }
+        Ok(user_detail)
     }
 
     pub fn fetch_basic(&self, conf: &configuration::Config) -> Result<BasicUserDetail, Box<dyn Error>> {
         let full_user_info = self.fetch(conf)?;
         Ok(BasicUserDetail {
-                id: full_user_info.data[0].id.clone(), 
-                name: full_user_info.data[0].name.clone(), 
-                username: full_user_info.data[0].username.clone()
+                id: full_user_info.id.clone(), 
+                name: full_user_info.name.clone(), 
+                username: full_user_info.username.clone()
             })
     }
 }
@@ -81,7 +113,7 @@ impl TweetFetcher {
     pub fn new(user_id: &str) -> TweetFetcher {
         TweetFetcher { 
             user_id: user_id.to_string(), 
-            since_tweet_id: None
+            since_tweet_id: Some("1608055824878014464".to_string())
         }
     }
 
@@ -108,154 +140,188 @@ impl TweetFetcher {
         let mut fetched_list: Vec<FetchedTweet> = Vec::new();
         let mut related_users: Vec<BasicUserDetail> = Vec::new(); 
         let mut related_tweets: Vec<BasicTweet> = Vec::new();
-
-        let response = request.send()?.text()?;
-        let response_parsed: serde_json::Value = serde_json::from_str(&response)?;
-
-        let related_user_raw = &response_parsed["includes"]["users"];
-        if let Value::Array(related_user_list) = related_user_raw {
-            for user_entity_raw in related_user_list {
-                let username  = match &user_entity_raw["username"] {
-                    Value::String(username) => username.to_owned(), 
-                    _ => { return Err(Box::new(InvalidTweetField::new("includes.users.username"))); }
-                };
-                let user_id = match &user_entity_raw["id"] {
-                    Value::String(id) => id.to_owned(), 
-                    _ => { return Err(Box::new(InvalidTweetField::new("includes.users.id"))); }
-                };
-                let name = match &user_entity_raw["name"] {
-                    Value::String(name) => name.to_owned(), 
-                    _ => { return Err(Box::new(InvalidTweetField::new("includes.users.name"))); }
-                };
-
-                related_users.push(BasicUserDetail {
-                    id: user_id, 
-                    username: username, 
-                    name: name
-                });
+        let mut page_token: Option<String> = None;
+        
+        loop {
+            let mut request_cloned = request.try_clone().expect("the request should be cloned");
+            if let Some(page_token) = &page_token {
+                request_cloned = request_cloned.query(&[("pagination_token".to_string(), page_token.clone())]);
             }
-        }
+            let response = request_cloned.send()?.text()?;
+            let response_parsed: serde_json::Value = serde_json::from_str(&response)?;
 
-        let data_list = &response_parsed["data"];
-        match data_list {
-            Value::Array(tweet_list) => {
-                for tweet_item_raw in tweet_list {
-                    let mut tweet_item = FetchedTweet::new();
+            let related_user_raw = &response_parsed["includes"]["users"];
+            if let Value::Array(related_user_list) = related_user_raw {
+                for user_entity_raw in related_user_list {
+                    let username  = match &user_entity_raw["username"] {
+                        Value::String(username) => username.to_owned(), 
+                        _ => { return Err(Box::new(InvalidTweetField::new("includes.users.username"))); }
+                    };
+                    let user_id = match &user_entity_raw["id"] {
+                        Value::String(id) => id.to_owned(), 
+                        _ => { return Err(Box::new(InvalidTweetField::new("includes.users.id"))); }
+                    };
+                    let name = match &user_entity_raw["name"] {
+                        Value::String(name) => name.to_owned(), 
+                        _ => { return Err(Box::new(InvalidTweetField::new("includes.users.name"))); }
+                    };
 
-                    if let Value::String(tweet_id) = &tweet_item_raw["id"] {
-                        tweet_item.id = tweet_id.to_owned();
-                    } else {
-                        return Err(Box::new(InvalidTweetField::new("id")));
-                    }
-
-                    if let Value::String(tweet_text) = &tweet_item_raw["text"] {
-                        tweet_item.text = tweet_text.to_owned();
-                    } else {
-                        return Err(Box::new(InvalidTweetField::new("text")));
-                    }
-
-                    if let Value::String(created_at) = &tweet_item_raw["created_at"] {
-                        tweet_item.created_at = created_at.to_owned();
-                    } else {
-                        return Err(Box::new(InvalidTweetField::new("created_at")));
-                    }
-
-                    if let Value::String(author_id) = &tweet_item_raw["author_id"] {
-                        tweet_item.author_id = author_id.to_owned();
-                    } else {
-                        return Err(Box::new(InvalidTweetField::new("created_at")));
-                    }
-
-                    if let Value::String(ref_type) = &tweet_item_raw["referenced_tweets"][0]["type"] {
-                        let related_tweet_id = match &tweet_item_raw["referenced_tweets"][0]["id"] {
-                            Value::String(id) => id.to_owned(), 
-                            _ => {
-                                return Err(Box::new(InvalidTweetField::new("referenced_tweets.id")));
-                            }
-                        };
-                        let related_tweed_detail = BasicTweet {
-                            id: related_tweet_id, 
-                            text: String::new()
-                        }; 
-                        let related_user_detail = BasicUserDetail { 
-                            id: String::new(), 
-                            username: String::new(), 
-                            name: String::new() 
-                        };
-
-                        match ref_type.as_str() {
-                            "replied_to" => {
-                                tweet_item.tweet_type = TweetType::reply { 
-                                    tweet: related_tweed_detail, 
-                                    author: related_user_detail
-                                };
-                            }
-                            "quoted" => {
-                                tweet_item.tweet_type = TweetType::retweet { 
-                                    tweet: related_tweed_detail, 
-                                    author: related_user_detail
-                                };
-                            }
-                            "retweeted" => {
-                                tweet_item.tweet_type = TweetType::retweet { 
-                                    tweet: related_tweed_detail, 
-                                    author: related_user_detail
-                                };
-                            }
-                            _ => { return Err(Box::new(InvalidTweetField::new("referenced_tweets.type"))); }
-                        }
-                    }
-
-                    if let Value::Array(hashtag_list) = &tweet_item_raw["entities"]["hashtags"] {
-                        for hashtag_item in hashtag_list {
-                            if let Value::String(hashtag) = &hashtag_item["tag"] {
-                                if let None = tweet_item.hashtags {
-                                    tweet_item.hashtags = Some(Vec::new());
-                                }
-
-                                tweet_item.hashtags.as_mut().unwrap().push(hashtag.to_owned());
-                            }
-                        }
-                    }
-
-                    if let Value::Array(metion_list) = &tweet_item_raw["entities"]["mentions"] {
-                        for mention_entity in metion_list {
-                            if let Value::String(mentioned_username) = &mention_entity["username"] {
-                                let mentioned_id = match &mention_entity["id"] {
-                                    Value::String(id) => id.to_owned(), 
-                                    _ => {
-                                        return Err(Box::new(InvalidTweetField::new("entities.mentions.id")));
-                                    }
-                                };
-
-                                if let None = tweet_item.mentions {
-                                    tweet_item.mentions = Some(Vec::new());
-                                }
-
-                                println!("mentioned_id={:?}", mentioned_id);
-                                let default_user = BasicUserDetail {
-                                    id: mentioned_id.clone(), 
-                                    username: mentioned_username.clone(), 
-                                    name: String::new()
-                                };
-                                let basic_user_detail = query_result::find_by_id(&mentioned_id, &related_users).unwrap_or_else(|| {
-                                    let basic_user_query = UserInfoFetcher::new(mentioned_username);
-                                    basic_user_query.fetch_basic(conf).unwrap_or(None)
-                                }).unwrap_or(&default_user);
-
-                                tweet_item.mentions.as_mut().unwrap().push(BasicUserDetail {
-                                    id: mentioned_id, 
-                                    username: mentioned_username.to_owned(), 
-                                    name: basic_user_detail.name.clone()
-                                });
-                            }
-                        }
-                    }
-                    fetched_list.push(tweet_item);
+                    related_users.push(BasicUserDetail {
+                        id: user_id, 
+                        username: username, 
+                        name: name
+                    });
                 }
             }
-            _ => {return Err(Box::new(InvalidTweetField::new("data")));}
+
+            let related_tweet_raw = &response_parsed["includes"]["tweets"];
+            if let Value::Array(related_tweet_list) = related_tweet_raw {
+                for tweet_raw in related_tweet_list {
+                    let text = match &tweet_raw["text"] {
+                        Value::String(text) => text.to_owned(), 
+                        _ => { return Err(Box::new(InvalidTweetField::new("includes.tweets.text"))); }
+                    };
+                    let author_id = match &tweet_raw["author_id"] {
+                        Value::String(author_id) => author_id.to_owned(), 
+                        _ => { return Err(Box::new(InvalidTweetField::new("includes.tweets.author_id"))); }
+                    };
+                    let tweet_id = match &tweet_raw["id"] {
+                        Value::String(tweet_id) => tweet_id.to_owned(), 
+                        _ => { return Err(Box::new(InvalidTweetField::new("includes.tweets.id"))); }
+                    }; 
+
+                    related_tweets.push(BasicTweet {
+                        author_id: author_id, 
+                        id: tweet_id, 
+                        text: text
+                    });
+                }
+            }
+
+            let data_list = &response_parsed["data"];
+            match data_list {
+                Value::Array(tweet_list) => {
+                    for tweet_item_raw in tweet_list {
+                        let mut tweet_item = FetchedTweet::new();
+
+                        if let Value::String(tweet_id) = &tweet_item_raw["id"] {
+                            tweet_item.id = tweet_id.to_owned();
+                        } else {
+                            return Err(Box::new(InvalidTweetField::new("id")));
+                        }
+
+                        if let Value::String(tweet_text) = &tweet_item_raw["text"] {
+                            tweet_item.text = tweet_text.to_owned();
+                        } else {
+                            return Err(Box::new(InvalidTweetField::new("text")));
+                        }
+
+                        if let Value::String(created_at) = &tweet_item_raw["created_at"] {
+                            tweet_item.created_at = created_at.to_owned();
+                        } else {
+                            return Err(Box::new(InvalidTweetField::new("created_at")));
+                        }
+
+                        if let Value::String(author_id) = &tweet_item_raw["author_id"] {
+                            tweet_item.author_id = author_id.to_owned();
+                        } else {
+                            return Err(Box::new(InvalidTweetField::new("created_at")));
+                        }
+
+                        if let Value::String(ref_type) = &tweet_item_raw["referenced_tweets"][0]["type"] {
+                            let related_tweet_id = match &tweet_item_raw["referenced_tweets"][0]["id"] {
+                                Value::String(id) => id.to_owned(), 
+                                _ => {
+                                    return Err(Box::new(InvalidTweetField::new("referenced_tweets.id")));
+                                }
+                            };
+                            
+                            let related_tweed_detail = query_result::find_by_id(&related_tweet_id, &related_tweets).cloned().unwrap_or(BasicTweet { text: "".to_string(), id: related_tweet_id.clone(), author_id: "".to_string() });
+                            let related_user_detail = query_result::find_by_id(&related_tweed_detail.author_id, &related_users).cloned().unwrap_or(BasicUserDetail { id: "".to_string(), username: "".to_string(), name: "".to_string() });
+
+                            match ref_type.as_str() {
+                                "replied_to" => {
+                                    tweet_item.tweet_type = TweetType::Reply { 
+                                        tweet: related_tweed_detail, 
+                                        author: related_user_detail
+                                    };
+                                }
+                                "quoted" => {
+                                    tweet_item.tweet_type = TweetType::Retweet { 
+                                        tweet: related_tweed_detail, 
+                                        author: related_user_detail
+                                    };
+                                }
+                                "retweeted" => {
+                                    tweet_item.tweet_type = TweetType::Retweet { 
+                                        tweet: related_tweed_detail, 
+                                        author: related_user_detail
+                                    };
+                                }
+                                _ => { return Err(Box::new(InvalidTweetField::new("referenced_tweets.type"))); }
+                            }
+                        }
+
+                        if let Value::Array(hashtag_list) = &tweet_item_raw["entities"]["hashtags"] {
+                            for hashtag_item in hashtag_list {
+                                if let Value::String(hashtag) = &hashtag_item["tag"] {
+                                    if let None = tweet_item.hashtags {
+                                        tweet_item.hashtags = Some(Vec::new());
+                                    }
+
+                                    tweet_item.hashtags.as_mut().unwrap().push(hashtag.to_owned());
+                                }
+                            }
+                        }
+
+                        if let Value::Array(metion_list) = &tweet_item_raw["entities"]["mentions"] {
+                            for mention_entity in metion_list {
+                                if let Value::String(mentioned_username) = &mention_entity["username"] {
+                                    let mentioned_id = match &mention_entity["id"] {
+                                        Value::String(id) => id.to_owned(), 
+                                        _ => {
+                                            return Err(Box::new(InvalidTweetField::new("entities.mentions.id")));
+                                        }
+                                    };
+
+                                    if let None = tweet_item.mentions {
+                                        tweet_item.mentions = Some(Vec::new());
+                                    }
+
+                                    let basic_user_detail = query_result::find_by_id(&mentioned_id, &related_users).cloned().unwrap_or(BasicUserDetail {
+                                        id: mentioned_id.clone(), 
+                                        username: mentioned_username.clone(), 
+                                        name: String::new()
+                                    });
+
+                                    tweet_item.mentions.as_mut().unwrap().push(BasicUserDetail {
+                                        id: mentioned_id, 
+                                        username: mentioned_username.to_owned(), 
+                                        name: basic_user_detail.name
+                                    });
+                                }
+                            }
+                        }
+                        fetched_list.push(tweet_item);
+                    }
+                }
+                _ => {
+                    if let Value::Number(n_result) = &response_parsed["meta"]["result_count"] {
+                        if n_result.as_i64().expect("should return result num") == 0 {
+                            break;
+                        }
+                    } else {
+                        return Err(Box::new(InvalidTweetField::new("data")));
+                    }
+                }
+            }
+
+            page_token = match &response_parsed["meta"]["next_token"] {
+                Value::String(token) => Some(token.clone()), 
+                _ => { break; }
+            };
         }
+        
         Ok(fetched_list)
     }
 }

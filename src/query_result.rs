@@ -1,5 +1,3 @@
-use std::{collections::HashMap};
-
 use serde::{Serialize, Deserialize};
 
 pub trait IdMarked {
@@ -21,12 +19,7 @@ impl IdMarked for UserDetail {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct UserInfo {
-    pub data: Vec<UserDetail>,
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BasicUserDetail {
     pub id: String, 
     pub username: String, 
@@ -39,10 +32,11 @@ impl IdMarked for BasicUserDetail {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BasicTweet {
     pub text: String, 
-    pub id: String
+    pub id: String, 
+    pub author_id: String,
 }
 
 impl IdMarked for BasicTweet {
@@ -53,12 +47,12 @@ impl IdMarked for BasicTweet {
 
 #[derive(Debug)]
 pub enum TweetType {
-    tweet, 
-    reply {
+    Tweet, 
+    Reply {
         tweet: BasicTweet, 
         author: BasicUserDetail
     }, 
-    retweet {
+    Retweet {
        tweet: BasicTweet, 
        author: BasicUserDetail
     }
@@ -82,7 +76,7 @@ impl FetchedTweet {
             text: String::new(), 
             created_at: String::new(), 
             author_id: String::new(), 
-            tweet_type: TweetType::tweet, 
+            tweet_type: TweetType::Tweet, 
             hashtags: None, 
             mentions: None,
         }

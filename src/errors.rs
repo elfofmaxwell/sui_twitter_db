@@ -19,3 +19,24 @@ impl InvalidTweetField {
         }
     }
 }
+
+#[derive(Debug)]
+pub struct InvalidUserField {
+    field: String
+}
+
+impl Error for InvalidUserField {}
+
+impl fmt::Display for InvalidUserField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "User Object: Required field {} is invalid!", &self.field)
+    }
+}
+
+impl InvalidUserField {
+    pub fn new(field: &str) -> InvalidUserField {
+        InvalidUserField {
+            field: field.to_string()
+        }
+    }
+}

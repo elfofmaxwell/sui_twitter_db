@@ -143,8 +143,6 @@ fn percent_encode_pair(param_map: &HashMap<String, String>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::configuration::Config;
-
     use super::*;
 
     #[test]

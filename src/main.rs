@@ -1,4 +1,4 @@
-use std::{process, fs};
+use std::{process};
 use clap::Parser;
 use sui_twitter_db::{configuration::{Config, Args}, request_builder::{UserInfoFetcher, TweetFetcher}};
 
@@ -17,9 +17,9 @@ fn main() {
     for username in config.monitoring_username.iter() {
         let user_info = UserInfoFetcher::new(username); 
         let fetched_user = dbg!(user_info.fetch(&config).expect("Error in fetch user!"));
-        let tweet_query = TweetFetcher::new(&fetched_user.data[0].id);
+        let tweet_query = TweetFetcher::new(&fetched_user.id);
         let query_result = tweet_query.fetch(&config).expect("Error in query tweet!");
         //fs::write("./test_result.json", &query_result).expect("Unable to write to result file");
-        dbg!(query_result);
+        println!("{:?}", query_result);
     }
 }
