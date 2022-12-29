@@ -110,10 +110,20 @@ impl OAuthComponents {
         base64::encode(mac.finalize().into_bytes())
     }
 
-    pub fn from_config(conf: &configuration::Config, params: &impl RequestParams) -> Result<(OAuthComponents, String), Box<dyn Error>> {
-        let mut oauth_component = OAuthComponents::builder(&conf.oauth_consumer_key, &conf.oauth_token, &conf.oauth_consumer_secret, &conf.oauth_token_secret)?;
+    pub fn from_config(
+        conf: &configuration::Config, 
+        params: &impl RequestParams
+    ) -> Result<(OAuthComponents, String), Box<dyn Error>> {
+        let mut oauth_component = OAuthComponents::builder(
+            &conf.oauth_consumer_key, 
+            &conf.oauth_token, 
+            &conf.oauth_consumer_secret, 
+            &conf.oauth_token_secret
+        )?;
 
-        let signature_base = oauth_component.build_signature_base(&params.get_base_url(), &params.to_hashmap(), &params.get_method())?;
+        let signature_base = oauth_component.build_signature_base(
+            &params.get_base_url(), &params.to_hashmap(), &params.get_method()
+        )?;
         let signature = oauth_component.cal_signature(&signature_base);
         oauth_component.oauth_signature = signature.clone();
 
@@ -131,7 +141,10 @@ impl OAuthComponents {
 
 
 fn percent_encode(string_to_encode: &str) -> String {
-    const NON_DOT_ASCII: &AsciiSet = &percent_encoding::NON_ALPHANUMERIC.remove(b'.').remove(b'_').remove(b'-').remove(b'~');
+    const NON_DOT_ASCII: &AsciiSet = &percent_encoding::NON_ALPHANUMERIC.remove(b'.')
+        .remove(b'_')
+        .remove(b'-')
+        .remove(b'~');
     percent_encoding::utf8_percent_encode(string_to_encode, NON_DOT_ASCII).to_string()
 }
 

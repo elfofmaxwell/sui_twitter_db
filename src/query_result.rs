@@ -1,4 +1,5 @@
 use serde::{Serialize, Deserialize};
+use chrono::prelude::*;
 
 pub trait IdMarked {
     fn get_id(&self) -> &String;
@@ -79,6 +80,41 @@ impl FetchedTweet {
             tweet_type: TweetType::Tweet, 
             hashtags: None, 
             mentions: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct LikedTweet {
+    pub recorded_time: String, 
+    pub tweet: BasicTweet, 
+    pub author: BasicUserDetail
+}
+
+impl LikedTweet {
+    pub fn record() -> LikedTweet {
+        let current_time_vec: Vec<String> = Utc::now().format("%+").to_string().chars().enumerate().map(|(idx, x)| {
+            if idx <  23 {
+                x.to_string()
+            } else if idx == 23 {
+                'Z'.to_string()
+            } else {
+                "".to_string()
+            }
+        } ).collect();
+
+        LikedTweet { 
+            recorded_time: current_time_vec.join(""), 
+            tweet: BasicTweet {
+                text: String::new(), 
+                id: String::new(), 
+                author_id: String::new()
+            }, 
+            author: BasicUserDetail { 
+                id: String::new(), 
+                username: String::new(), 
+                name: String::new() 
+            } 
         }
     }
 }

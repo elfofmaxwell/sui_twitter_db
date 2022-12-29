@@ -40,3 +40,20 @@ impl InvalidUserField {
         }
     }
 }
+
+#[derive(Debug)]
+pub struct InvalidUserList;
+
+impl Error for InvalidUserList {}
+
+impl fmt::Display for InvalidUserList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "The user list is invalid!")
+    }
+}
+
+impl InvalidUserList {
+    pub fn new() -> InvalidUserList {
+        InvalidUserList
+    }
+}

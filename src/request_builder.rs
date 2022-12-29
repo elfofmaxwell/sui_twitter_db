@@ -4,8 +4,8 @@ use reqwest::{blocking::{Client}};
 use serde_json::Value;
 
 
-use crate::errors::{InvalidTweetField, InvalidUserField};
-use crate::query_result::{self, UserDetail};
+use crate::errors::*;
+use crate::query_result::{self, UserDetail, LikedTweet};
 use crate::query_result::{FetchedTweet, BasicUserDetail, TweetType, BasicTweet};
 use crate::{configuration};
 
@@ -110,14 +110,21 @@ pub struct TweetFetcher {
 }
 
 impl TweetFetcher {
-    pub fn new(user_id: &str) -> TweetFetcher {
+    pub fn new(user_id: &str, since_tweet_id: Option<&str>) -> TweetFetcher {
         TweetFetcher { 
             user_id: user_id.to_string(), 
-            since_tweet_id: Some("1608055824878014464".to_string())
+            since_tweet_id: match since_tweet_id {
+                Some(tweet_id) => Some(tweet_id.to_string()), 
+                None => None
+            }
         }
     }
 
-    pub fn fetch(&self, conf: &configuration::Config) -> Result<Vec<FetchedTweet>, Box<dyn Error>> {
+    pub fn fetch(&self, conf: &configuration::Config) -> Result<(
+        Vec<FetchedTweet>, 
+        Vec<BasicTweet>, 
+        Vec<BasicUserDetail>
+    ), Box<dyn Error>> {
         let client = Client::builder().build().expect("error in client builder");
         let query_url = format!("https://api.twitter.com/2/users/{}/tweets", &self.user_id);
         let mut request = client.get(&query_url).query(&[
@@ -150,29 +157,8 @@ impl TweetFetcher {
             let response = request_cloned.send()?.text()?;
             let response_parsed: serde_json::Value = serde_json::from_str(&response)?;
 
-            let related_user_raw = &response_parsed["includes"]["users"];
-            if let Value::Array(related_user_list) = related_user_raw {
-                for user_entity_raw in related_user_list {
-                    let username  = match &user_entity_raw["username"] {
-                        Value::String(username) => username.to_owned(), 
-                        _ => { return Err(Box::new(InvalidTweetField::new("includes.users.username"))); }
-                    };
-                    let user_id = match &user_entity_raw["id"] {
-                        Value::String(id) => id.to_owned(), 
-                        _ => { return Err(Box::new(InvalidTweetField::new("includes.users.id"))); }
-                    };
-                    let name = match &user_entity_raw["name"] {
-                        Value::String(name) => name.to_owned(), 
-                        _ => { return Err(Box::new(InvalidTweetField::new("includes.users.name"))); }
-                    };
-
-                    related_users.push(BasicUserDetail {
-                        id: user_id, 
-                        username: username, 
-                        name: name
-                    });
-                }
-            }
+            let mut related_user_in_page = collect_include_users(&response_parsed["includes"]["users"])?;
+            related_users.append(&mut related_user_in_page);
 
             let related_tweet_raw = &response_parsed["includes"]["tweets"];
             if let Value::Array(related_tweet_list) = related_tweet_raw {
@@ -236,8 +222,26 @@ impl TweetFetcher {
                                 }
                             };
                             
-                            let related_tweed_detail = query_result::find_by_id(&related_tweet_id, &related_tweets).cloned().unwrap_or(BasicTweet { text: "".to_string(), id: related_tweet_id.clone(), author_id: "".to_string() });
-                            let related_user_detail = query_result::find_by_id(&related_tweed_detail.author_id, &related_users).cloned().unwrap_or(BasicUserDetail { id: "".to_string(), username: "".to_string(), name: "".to_string() });
+                            let related_tweed_detail = query_result::find_by_id(
+                                &related_tweet_id, 
+                                &related_tweets
+                            ).cloned().unwrap_or(
+                                    BasicTweet { 
+                                        text: String::from("Unavailable tweet"), 
+                                        id: related_tweet_id.clone(), 
+                                        author_id: "".to_string() 
+                                    }
+                                );
+                                
+                            let related_user_detail = query_result::find_by_id(
+                                &related_tweed_detail.author_id, 
+                                &related_users).cloned().unwrap_or(
+                                    BasicUserDetail { 
+                                        id: "".to_string(), 
+                                        username: "".to_string(), 
+                                        name: "".to_string() 
+                                    }
+                                );
 
                             match ref_type.as_str() {
                                 "replied_to" => {
@@ -288,10 +292,13 @@ impl TweetFetcher {
                                         tweet_item.mentions = Some(Vec::new());
                                     }
 
-                                    let basic_user_detail = query_result::find_by_id(&mentioned_id, &related_users).cloned().unwrap_or(BasicUserDetail {
+                                    let basic_user_detail = query_result::find_by_id(
+                                        &mentioned_id, 
+                                        &related_users
+                                    ).cloned().unwrap_or(BasicUserDetail {
                                         id: mentioned_id.clone(), 
                                         username: mentioned_username.clone(), 
-                                        name: String::new()
+                                        name: String::from("Unavailable account")
                                     });
 
                                     tweet_item.mentions.as_mut().unwrap().push(BasicUserDetail {
@@ -322,7 +329,123 @@ impl TweetFetcher {
             };
         }
         
+        Ok((fetched_list, related_tweets, related_users))
+    }
+}
+
+
+pub struct LikeFetcher {
+    user_id: String, 
+    latest_recorded_id: Option<String>
+}
+
+impl LikeFetcher {
+    pub fn new(user_id: &str, latest_recorded_id: Option<&str>) -> LikeFetcher {
+        LikeFetcher { 
+            user_id: user_id.to_string(), 
+            latest_recorded_id: match latest_recorded_id {
+                Some(latest_recorded_id) => Some(latest_recorded_id.to_string()), 
+                None => None 
+            }
+        }
+    }
+
+    pub fn fetch(&self, conf:&configuration::Config) -> Result<Vec<LikedTweet>, Box<dyn Error>> {
+        let client = Client::builder().build().expect("error in client builder");
+        let query_url = format!("https://api.twitter.com/2/users/{}/liked_tweets", &self.user_id);
+        let mut request = client.get(&query_url).query(&[
+            ("expansions".to_string(), "author_id".to_string()), 
+            ("max_results".to_string(), "100".to_string()), 
+            ("tweet.fields".to_string(), "id,text".to_string()),
+            ("user.fields".to_string(), "id,name,username".to_string())
+        ]).header("Authorization", format!("Bearer {}", &conf.bearer_token));
+
+        let mut fetched_list: Vec<LikedTweet> = Vec::new();
+        let mut related_users: Vec<BasicUserDetail> = Vec::new(); 
+        let mut related_tweets: Vec<BasicTweet> = Vec::new();
+        let mut page_token: Option<String> = None;
+
+        let response = request.send()?.text()?;
+        let response_parsed: serde_json::Value = serde_json::from_str(&response)?;
+        
+        let data_list = &response_parsed["data"];
+        
+        let mut related_user_in_page = collect_include_users(&response_parsed["includes"]["users"])?;
+        related_users.append(&mut related_user_in_page);
+
+        match data_list {
+            Value::Array(liked_list) => {
+                for liked_tweet_raw in liked_list {
+                    let mut liked_tweet_item = LikedTweet::record();
+                    let mut related_tweet_item = BasicTweet {
+                        id: String::new(),
+                        author_id: String::new(), 
+                        text: String::new()
+                    };
+                    if let Value::String(tweet_id) = &liked_tweet_raw["id"] {
+                        related_tweet_item.id = tweet_id.to_string();
+                    } else {
+                        return Err(Box::new(InvalidTweetField::new("id")));
+                    }
+
+                    if let Value::String(author_id) = &liked_tweet_raw["author_id"] {
+                        related_tweet_item.author_id = author_id.to_string();
+                    } else {
+                        return Err(Box::new(InvalidTweetField::new("author_id")));
+                    }
+
+                    if let Value::String(tweet_text) = &liked_tweet_raw["text"] {
+                        related_tweet_item.text = tweet_text.to_string(); 
+                    } else {
+                        return Err(Box::new(InvalidTweetField::new("text")));
+                    }
+
+                    let basic_user_info = query_result::find_by_id(&related_tweet_item.author_id, &related_users).cloned().unwrap_or(BasicUserDetail {
+                        id: related_tweet_item.author_id.clone(), 
+                        username: String::from("unavailable_account"), 
+                        name: String::from("Unavailable account")
+                    });
+
+                    liked_tweet_item.tweet = related_tweet_item.clone();
+                    liked_tweet_item.author = basic_user_info.clone();
+
+                    related_tweets.push(related_tweet_item); 
+                    fetched_list.push(liked_tweet_item);
+                }
+            }
+            _ => {return Err(Box::new(InvalidUserList::new()));}
+        }
+
         Ok(fetched_list)
     }
 }
 
+fn collect_include_users(include_users_raw: &Value) -> Result<Vec<BasicUserDetail>, Box<dyn Error>> {
+    let mut related_users: Vec<BasicUserDetail> = Vec::new();
+    if let Value::Array(related_user_list) = include_users_raw {
+        for user_entity_raw in related_user_list {
+            let username  = match &user_entity_raw["username"] {
+                Value::String(username) => username.to_owned(), 
+                _ => { return Err(Box::new(InvalidTweetField::new("includes.users.username"))); }
+            };
+            let user_id = match &user_entity_raw["id"] {
+                Value::String(id) => id.to_owned(), 
+                _ => { return Err(Box::new(InvalidTweetField::new("includes.users.id"))); }
+            };
+            let name = match &user_entity_raw["name"] {
+                Value::String(name) => name.to_owned(), 
+                _ => { return Err(Box::new(InvalidTweetField::new("includes.users.name"))); }
+            };
+
+            related_users.push(BasicUserDetail {
+                id: user_id, 
+                username: username, 
+                name: name
+            });
+        }
+    } else {
+        return Err(Box::new(InvalidUserList::new()));
+    }
+
+    Ok(related_users)
+}
