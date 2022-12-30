@@ -1,6 +1,8 @@
 use serde::{Serialize, Deserialize};
 use chrono::prelude::*;
 
+use crate::configuration::TaskType;
+
 pub trait IdMarked {
     fn get_id(&self) -> &String;
 }
@@ -38,6 +40,7 @@ pub struct BasicTweet {
     pub text: String, 
     pub id: String, 
     pub author_id: String,
+    pub hashtags: Option<Vec<String>>, 
 }
 
 impl IdMarked for BasicTweet {
@@ -86,29 +89,34 @@ impl FetchedTweet {
 
 #[derive(Debug)]
 pub struct LikedTweet {
-    pub recorded_time: String, 
+    pub recorded_time: Option<String>, 
     pub tweet: BasicTweet, 
     pub author: BasicUserDetail
 }
 
 impl LikedTweet {
-    pub fn record() -> LikedTweet {
-        let current_time_vec: Vec<String> = Utc::now().format("%+").to_string().chars().enumerate().map(|(idx, x)| {
-            if idx <  23 {
-                x.to_string()
-            } else if idx == 23 {
-                'Z'.to_string()
-            } else {
-                "".to_string()
-            }
-        } ).collect();
+    pub fn record(task_type: &TaskType) -> LikedTweet {
+        let mut time_string: Option<String> = None;
+        if let TaskType::Monitoring = task_type {
+            let current_time_vec: Vec<String> = Utc::now().format("%+").to_string().chars().enumerate().map(|(idx, x)| {
+                if idx <  23 {
+                    x.to_string()
+                } else if idx == 23 {
+                    'Z'.to_string()
+                } else {
+                    "".to_string()
+                }
+            } ).collect();
+            time_string = Some(current_time_vec.join(""));
+        } 
 
         LikedTweet { 
-            recorded_time: current_time_vec.join(""), 
+            recorded_time: time_string, 
             tweet: BasicTweet {
                 text: String::new(), 
                 id: String::new(), 
-                author_id: String::new()
+                author_id: String::new(),
+                hashtags: None
             }, 
             author: BasicUserDetail { 
                 id: String::new(), 

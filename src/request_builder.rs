@@ -163,24 +163,8 @@ impl TweetFetcher {
             let related_tweet_raw = &response_parsed["includes"]["tweets"];
             if let Value::Array(related_tweet_list) = related_tweet_raw {
                 for tweet_raw in related_tweet_list {
-                    let text = match &tweet_raw["text"] {
-                        Value::String(text) => text.to_owned(), 
-                        _ => { return Err(Box::new(InvalidTweetField::new("includes.tweets.text"))); }
-                    };
-                    let author_id = match &tweet_raw["author_id"] {
-                        Value::String(author_id) => author_id.to_owned(), 
-                        _ => { return Err(Box::new(InvalidTweetField::new("includes.tweets.author_id"))); }
-                    };
-                    let tweet_id = match &tweet_raw["id"] {
-                        Value::String(tweet_id) => tweet_id.to_owned(), 
-                        _ => { return Err(Box::new(InvalidTweetField::new("includes.tweets.id"))); }
-                    }; 
-
-                    related_tweets.push(BasicTweet {
-                        author_id: author_id, 
-                        id: tweet_id, 
-                        text: text
-                    });
+                    let mut related_tweet_item = parse_related_tweet(tweet_raw)?;
+                    related_tweets.push(related_tweet_item);
                 }
             }
 
@@ -229,7 +213,8 @@ impl TweetFetcher {
                                     BasicTweet { 
                                         text: String::from("Unavailable tweet"), 
                                         id: related_tweet_id.clone(), 
-                                        author_id: "".to_string() 
+                                        author_id: "".to_string(), 
+                                        hashtags: None
                                     }
                                 );
                                 
@@ -356,7 +341,7 @@ impl LikeFetcher {
         let mut request = client.get(&query_url).query(&[
             ("expansions".to_string(), "author_id".to_string()), 
             ("max_results".to_string(), "100".to_string()), 
-            ("tweet.fields".to_string(), "id,text".to_string()),
+            ("tweet.fields".to_string(), "id,text,entities".to_string()),
             ("user.fields".to_string(), "id,name,username".to_string())
         ]).header("Authorization", format!("Bearer {}", &conf.bearer_token));
 
@@ -376,29 +361,8 @@ impl LikeFetcher {
         match data_list {
             Value::Array(liked_list) => {
                 for liked_tweet_raw in liked_list {
-                    let mut liked_tweet_item = LikedTweet::record();
-                    let mut related_tweet_item = BasicTweet {
-                        id: String::new(),
-                        author_id: String::new(), 
-                        text: String::new()
-                    };
-                    if let Value::String(tweet_id) = &liked_tweet_raw["id"] {
-                        related_tweet_item.id = tweet_id.to_string();
-                    } else {
-                        return Err(Box::new(InvalidTweetField::new("id")));
-                    }
-
-                    if let Value::String(author_id) = &liked_tweet_raw["author_id"] {
-                        related_tweet_item.author_id = author_id.to_string();
-                    } else {
-                        return Err(Box::new(InvalidTweetField::new("author_id")));
-                    }
-
-                    if let Value::String(tweet_text) = &liked_tweet_raw["text"] {
-                        related_tweet_item.text = tweet_text.to_string(); 
-                    } else {
-                        return Err(Box::new(InvalidTweetField::new("text")));
-                    }
+                    let mut liked_tweet_item = LikedTweet::record(&conf.task_type);
+                    let related_tweet_item = parse_related_tweet(liked_tweet_raw)?;
 
                     let basic_user_info = query_result::find_by_id(&related_tweet_item.author_id, &related_users).cloned().unwrap_or(BasicUserDetail {
                         id: related_tweet_item.author_id.clone(), 
@@ -448,4 +412,37 @@ fn collect_include_users(include_users_raw: &Value) -> Result<Vec<BasicUserDetai
     }
 
     Ok(related_users)
+}
+
+fn parse_related_tweet(single_tweet_raw: &Value) -> Result<BasicTweet, Box<dyn Error>> {
+    let mut related_tweet_item = BasicTweet {
+        author_id: String::new(), 
+        id: String::new(), 
+        text: String::new(), 
+        hashtags: None
+    };
+    let text = match &single_tweet_raw["text"] {
+        Value::String(text) => { related_tweet_item.text = text.to_owned() }
+        _ => { return Err(Box::new(InvalidTweetField::new("includes.tweets.text"))); }
+    };
+    let author_id = match &single_tweet_raw["author_id"] {
+        Value::String(author_id) => { related_tweet_item.author_id = author_id.to_owned() }
+        _ => { return Err(Box::new(InvalidTweetField::new("includes.tweets.author_id"))); }
+    };
+    let tweet_id = match &single_tweet_raw["id"] {
+        Value::String(tweet_id) => { related_tweet_item.id = tweet_id.to_owned() }
+        _ => { return Err(Box::new(InvalidTweetField::new("includes.tweets.id"))); }
+    }; 
+    if let Value::Array(hashtag_list) = &single_tweet_raw["entities"]["hashtags"] {
+        for hashtag_item in hashtag_list {
+            if let Value::String(hashtag) = &hashtag_item["tag"] {
+                if let None = related_tweet_item.hashtags {
+                    related_tweet_item.hashtags = Some(Vec::new());
+                }
+
+                related_tweet_item.hashtags.as_mut().unwrap().push(hashtag.to_owned());
+            }
+        }
+    }
+    Ok(related_tweet_item)
 }

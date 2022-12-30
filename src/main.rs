@@ -6,7 +6,7 @@ fn main() {
     
     let args = Args::parse();
 
-    let config = match Config::configure(&args.conf_path, args.verbose) {
+    let config = match Config::configure(&args.conf_path, args.verbose, &args.task_type) {
         Ok(config) => config, 
         Err(e) => {
             eprintln!("{e}");
