@@ -1,11 +1,13 @@
 use std::{collections::HashMap};
 use std::error::Error;
+use std::{thread, time};
 use reqwest::{blocking::{Client}};
 use serde_json::Value;
 
 
+use crate::configuration::TaskType;
 use crate::errors::*;
-use crate::query_result::{self, UserDetail, LikedTweet};
+use crate::query_result::{self, UserDetail, LikedTweet, FollowingUser};
 use crate::query_result::{FetchedTweet, BasicUserDetail, TweetType, BasicTweet};
 use crate::{configuration};
 
@@ -151,8 +153,8 @@ impl TweetFetcher {
         
         loop {
             let mut request_cloned = request.try_clone().expect("the request should be cloned");
-            if let Some(page_token) = &page_token {
-                request_cloned = request_cloned.query(&[("pagination_token".to_string(), page_token.clone())]);
+            if let Some(next_token) = &page_token {
+                request_cloned = request_cloned.query(&[("pagination_token".to_string(), next_token.clone())]);
             }
             let response = request_cloned.send()?.text()?;
             let response_parsed: serde_json::Value = serde_json::from_str(&response)?;
@@ -163,7 +165,7 @@ impl TweetFetcher {
             let related_tweet_raw = &response_parsed["includes"]["tweets"];
             if let Value::Array(related_tweet_list) = related_tweet_raw {
                 for tweet_raw in related_tweet_list {
-                    let mut related_tweet_item = parse_related_tweet(tweet_raw)?;
+                    let related_tweet_item = parse_related_tweet(tweet_raw)?;
                     related_tweets.push(related_tweet_item);
                 }
             }
@@ -314,6 +316,7 @@ impl TweetFetcher {
             };
         }
         
+        fetched_list.reverse();
         Ok((fetched_list, related_tweets, related_users))
     }
 }
@@ -335,10 +338,15 @@ impl LikeFetcher {
         }
     }
 
-    pub fn fetch(&self, conf:&configuration::Config) -> Result<Vec<LikedTweet>, Box<dyn Error>> {
+    pub fn fetch(&self, conf:&configuration::Config) -> Result<(Vec<LikedTweet>, Vec<BasicTweet>, Vec<BasicUserDetail>), Box<dyn Error>> {
+        let mut latest_recorded_id: Option<String> = None;
+        if let TaskType::Monitoring = conf.task_type {
+            latest_recorded_id = self.latest_recorded_id.clone();
+        }
+
         let client = Client::builder().build().expect("error in client builder");
         let query_url = format!("https://api.twitter.com/2/users/{}/liked_tweets", &self.user_id);
-        let mut request = client.get(&query_url).query(&[
+        let request = client.get(&query_url).query(&[
             ("expansions".to_string(), "author_id".to_string()), 
             ("max_results".to_string(), "100".to_string()), 
             ("tweet.fields".to_string(), "id,text,entities".to_string()),
@@ -349,37 +357,167 @@ impl LikeFetcher {
         let mut related_users: Vec<BasicUserDetail> = Vec::new(); 
         let mut related_tweets: Vec<BasicTweet> = Vec::new();
         let mut page_token: Option<String> = None;
-
-        let response = request.send()?.text()?;
-        let response_parsed: serde_json::Value = serde_json::from_str(&response)?;
         
-        let data_list = &response_parsed["data"];
-        
-        let mut related_user_in_page = collect_include_users(&response_parsed["includes"]["users"])?;
-        related_users.append(&mut related_user_in_page);
-
-        match data_list {
-            Value::Array(liked_list) => {
-                for liked_tweet_raw in liked_list {
-                    let mut liked_tweet_item = LikedTweet::record(&conf.task_type);
-                    let related_tweet_item = parse_related_tweet(liked_tweet_raw)?;
-
-                    let basic_user_info = query_result::find_by_id(&related_tweet_item.author_id, &related_users).cloned().unwrap_or(BasicUserDetail {
-                        id: related_tweet_item.author_id.clone(), 
-                        username: String::from("unavailable_account"), 
-                        name: String::from("Unavailable account")
-                    });
-
-                    liked_tweet_item.tweet = related_tweet_item.clone();
-                    liked_tweet_item.author = basic_user_info.clone();
-
-                    related_tweets.push(related_tweet_item); 
-                    fetched_list.push(liked_tweet_item);
+        'over_pages: loop {
+            let mut request_cloned = request.try_clone().expect("Should be able to clone request");
+            if let Some(next_token) = &page_token {
+                request_cloned = request_cloned.query(&[("pagination_token".to_string(), next_token.clone())]);
+            }
+            let response = request_cloned.send()?.text()?;
+            let response_parsed: serde_json::Value = serde_json::from_str(&response)?;
+            
+            let data_list = &response_parsed["data"];
+            
+            let mut related_user_in_page = collect_include_users(&response_parsed["includes"]["users"])?;
+            related_users.append(&mut related_user_in_page);
+    
+            match data_list {
+                Value::Array(liked_list) => {
+                    for liked_tweet_raw in liked_list {
+                        let mut liked_tweet_item = LikedTweet::record(&conf.task_type);
+                        let related_tweet_item = parse_related_tweet(liked_tweet_raw)?;
+                        if let Some(latest_id) = &latest_recorded_id {
+                            if latest_id.as_str() == related_tweet_item.id.as_str() {
+                                break 'over_pages;
+                            }
+                        }
+                        let basic_user_info = query_result::find_by_id(&related_tweet_item.author_id, &related_users).cloned().unwrap_or(BasicUserDetail {
+                            id: related_tweet_item.author_id.clone(), 
+                            username: String::from("unavailable_account"), 
+                            name: String::from("Unavailable account")
+                        });
+    
+                        liked_tweet_item.tweet = related_tweet_item.clone();
+                        liked_tweet_item.author = basic_user_info.clone();
+    
+                        related_tweets.push(related_tweet_item); 
+                        fetched_list.push(liked_tweet_item);
+                    }
+                }
+                _ => {
+                    if let Value::Number(n_result) = &response_parsed["meta"]["result_count"] {
+                        if n_result.as_i64().expect("should return result num") == 0 {
+                            break 'over_pages;
+                        }
+                    } else {
+                        return Err(Box::new(InvalidTweetField::new("data")));
+                    }
                 }
             }
-            _ => {return Err(Box::new(InvalidUserList::new()));}
+
+            page_token = match &response_parsed["meta"]["next_token"] {
+                Value::String(token) => {
+                    thread::sleep(time::Duration::from_secs(12));
+                    Some(token.clone())
+                }, 
+                _ => { break 'over_pages; }
+            };
+
         }
 
+        fetched_list.reverse();
+        Ok((fetched_list, related_tweets, related_users))
+    }
+}
+
+pub struct FollowingFetcher {
+    user_id: String, 
+    following_id: Option<String>
+}
+
+impl FollowingFetcher {
+    pub fn new(user_id: &str, following_id: Option<String>) -> FollowingFetcher {
+        FollowingFetcher {
+            user_id: user_id.to_string(), 
+            following_id: following_id,
+        }
+    }
+
+    pub fn fetch(&self, conf: &configuration::Config) -> Result<Vec<FollowingUser>, Box<dyn Error>> {
+        let mut latest_recorded_id: Option<String> = None;
+        if let TaskType::Monitoring = conf.task_type {
+            latest_recorded_id = self.following_id.clone();
+        }
+
+        let client = Client::builder().build().expect("error in client builder");
+        let query_url = format!("https://api.twitter.com/2/users/{}/following", &self.user_id);
+        let request = client.get(&query_url).query(&[
+            ("max_results".to_string(), "1000".to_string()), 
+            ("user.fields".to_string(), "id,name,username".to_string())
+        ]).header("Authorization", format!("Bearer {}", &conf.bearer_token));
+
+        let mut fetched_list: Vec<FollowingUser> = Vec::new();
+        let mut related_users: Vec<BasicUserDetail> = Vec::new(); 
+        let mut page_token: Option<String> = None;
+
+        'over_pages: loop {
+            let mut request_cloned = request.try_clone().expect("Should be able to clone request");
+            if let Some(next_token) = &page_token {
+                request_cloned = request_cloned.query(&[("pagination_token".to_string(), next_token.clone())]);
+            }
+            let response = request_cloned.send()?.text()?;
+            let response_parsed: serde_json::Value = serde_json::from_str(&response)?;
+            
+            let data_list = &response_parsed["data"];
+
+            match data_list {
+                Value::Array(following_list) => {
+                    for following_user_raw in following_list {
+                        let mut following_entity = FollowingUser::record(&conf.task_type);
+
+                        let following_id = match &following_user_raw["id"] {
+                            Value::String(id) => id.to_string(), 
+                            _ => { return Err(Box::new(InvalidUserField::new("id"))); }
+                        };
+                        if let Some(latest_id) = &latest_recorded_id {
+                            if latest_id.as_str() == following_id {
+                                break 'over_pages;
+                            }
+                        }
+
+                        let following_username = match &following_user_raw["username"] {
+                            Value::String(username) => username.to_string(), 
+                            _ => { return Err(Box::new(InvalidUserField::new("username"))); }
+                        };
+
+                        let following_name = match &following_user_raw["name"] {
+                            Value::String(name) => name.to_string(), 
+                            _ => { return Err(Box::new(InvalidUserField::new("name"))); }
+                        };
+
+                        let following_user_detail = BasicUserDetail {
+                            id: following_id, 
+                            username: following_username, 
+                            name: following_name,
+                        };
+
+                        following_entity.user = following_user_detail.clone();
+
+                        fetched_list.push(following_entity);
+                        related_users.push(following_user_detail);
+                    }
+                }
+                _ => {
+                    if let Value::Number(n_result) = &response_parsed["meta"]["result_count"] {
+                        if n_result.as_i64().expect("should return result num") == 0 {
+                            break 'over_pages;
+                        }
+                    } else {
+                        return Err(Box::new(InvalidUserField::new("data")));
+                    }
+                }
+            }
+
+            page_token = match &response_parsed["meta"]["next_token"] {
+                Value::String(token) => {
+                    thread::sleep(time::Duration::from_secs(60));
+                    Some(token.clone())
+                }, 
+                _ => { break 'over_pages; }
+            };
+        }
+
+        fetched_list.reverse();
         Ok(fetched_list)
     }
 }
@@ -421,16 +559,16 @@ fn parse_related_tweet(single_tweet_raw: &Value) -> Result<BasicTweet, Box<dyn E
         text: String::new(), 
         hashtags: None
     };
-    let text = match &single_tweet_raw["text"] {
-        Value::String(text) => { related_tweet_item.text = text.to_owned() }
+    match &single_tweet_raw["text"] {
+        Value::String(text) => { related_tweet_item.text = text.to_owned(); }
         _ => { return Err(Box::new(InvalidTweetField::new("includes.tweets.text"))); }
     };
-    let author_id = match &single_tweet_raw["author_id"] {
-        Value::String(author_id) => { related_tweet_item.author_id = author_id.to_owned() }
+    match &single_tweet_raw["author_id"] {
+        Value::String(author_id) => { related_tweet_item.author_id = author_id.to_owned(); }
         _ => { return Err(Box::new(InvalidTweetField::new("includes.tweets.author_id"))); }
     };
-    let tweet_id = match &single_tweet_raw["id"] {
-        Value::String(tweet_id) => { related_tweet_item.id = tweet_id.to_owned() }
+    match &single_tweet_raw["id"] {
+        Value::String(tweet_id) => { related_tweet_item.id = tweet_id.to_owned(); }
         _ => { return Err(Box::new(InvalidTweetField::new("includes.tweets.id"))); }
     }; 
     if let Value::Array(hashtag_list) = &single_tweet_raw["entities"]["hashtags"] {

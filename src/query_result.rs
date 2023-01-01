@@ -127,6 +127,39 @@ impl LikedTweet {
     }
 }
 
+#[derive(Debug)]
+pub struct FollowingUser {
+    pub recorded_time: Option<String>, 
+    pub user: BasicUserDetail, 
+}
+
+impl FollowingUser {
+    pub fn record(task_type: &TaskType) -> FollowingUser {
+        let mut time_string: Option<String> = None;
+        if let TaskType::Monitoring = task_type {
+            let current_time_vec: Vec<String> = Utc::now().format("%+").to_string().chars().enumerate().map(|(idx, x)| {
+                if idx <  23 {
+                    x.to_string()
+                } else if idx == 23 {
+                    'Z'.to_string()
+                } else {
+                    "".to_string()
+                }
+            } ).collect();
+            time_string = Some(current_time_vec.join(""));
+        } 
+
+        FollowingUser { 
+            recorded_time: time_string, 
+            user: BasicUserDetail { 
+                id: String::new(), 
+                username: String::new(), 
+                name: String::new() 
+            } 
+        }
+    }
+}
+
 pub fn find_by_id<'a, T: IdMarked>(id: &str, dictionary: &'a Vec<T>) -> Option<&'a T> {
     dictionary.iter().find(|item| item.get_id()==id)
 }
