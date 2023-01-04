@@ -1,13 +1,15 @@
+use std::collections::HashSet;
 use std::{collections::HashMap};
 use std::error::Error;
 use std::{thread, time};
 use reqwest::{blocking::{Client}};
+use rusqlite::Connection;
 use serde_json::Value;
 
 
 use crate::configuration::TaskType;
 use crate::errors::*;
-use crate::query_result::{self, UserDetail, LikedTweet, FollowingUser};
+use crate::query_result::{self, UserDetail, LikedTweet, FollowingUser, FetchedUser, FollowingAction};
 use crate::query_result::{FetchedTweet, BasicUserDetail, TweetType, BasicTweet};
 use crate::{configuration};
 
@@ -47,7 +49,7 @@ impl UserInfoFetcher {
         UserInfoFetcher { user_id: user_id.to_string() }
     }
 
-    pub fn fetch(&self, conf: &configuration::Config) -> Result<UserDetail, Box<dyn Error>> {
+    pub fn fetch(&self, conf: &configuration::Config) -> Result<FetchedUser, Box<dyn Error>> {
         let client = Client::builder().build().expect("error in client builder");
         let request = 
             client
@@ -65,8 +67,8 @@ impl UserInfoFetcher {
             id: String::new(), 
             username: String::new(), 
             name: String::new(), 
-            location: String::new(), 
-            description: String::new(), 
+            location: None, 
+            description: None, 
         }; 
         if let Value::Array(user_list) = &raw_user["data"] {
             let user_entity = &user_list[0];
@@ -83,24 +85,27 @@ impl UserInfoFetcher {
                 _ => {return Err(Box::new(InvalidUserField::new("name")));}
             }; 
             user_detail.location = match &user_entity["location"] {
-                Value::String(location) => location.clone(), 
-                _ => String::new()
+                Value::String(location) => Some(location.clone()), 
+                _ => None
             }; 
             user_detail.description = match &user_entity["description"] {
-                Value::String(description) => description.clone(), 
-                _ => String::new()
+                Value::String(description) => Some(description.clone()), 
+                _ => None
             }; 
 
         }
-        Ok(user_detail)
+
+        let mut fetched_user = FetchedUser::record(&conf.task_type);
+        fetched_user.user = user_detail;
+        Ok(fetched_user)
     }
 
     pub fn fetch_basic(&self, conf: &configuration::Config) -> Result<BasicUserDetail, Box<dyn Error>> {
         let full_user_info = self.fetch(conf)?;
         Ok(BasicUserDetail {
-                id: full_user_info.id.clone(), 
-                name: full_user_info.name.clone(), 
-                username: full_user_info.username.clone()
+                id: full_user_info.user.id.clone(), 
+                name: full_user_info.user.name.clone(), 
+                username: full_user_info.user.username.clone()
             })
     }
 }
@@ -319,6 +324,8 @@ impl TweetFetcher {
         fetched_list.reverse();
         Ok((fetched_list, related_tweets, related_users))
     }
+
+
 }
 
 
@@ -374,7 +381,7 @@ impl LikeFetcher {
             match data_list {
                 Value::Array(liked_list) => {
                     for liked_tweet_raw in liked_list {
-                        let mut liked_tweet_item = LikedTweet::record(&conf.task_type);
+                        let mut liked_tweet_item = LikedTweet::record(&conf.task_type, &self.user_id);
                         let related_tweet_item = parse_related_tweet(liked_tweet_raw)?;
                         if let Some(latest_id) = &latest_recorded_id {
                             if latest_id.as_str() == related_tweet_item.id.as_str() {
@@ -420,24 +427,32 @@ impl LikeFetcher {
     }
 }
 
-pub struct FollowingFetcher {
+pub struct FollowingFetcher{
     user_id: String, 
-    following_id: Option<String>
+    following_ids: Option<Vec<String>>
 }
 
 impl FollowingFetcher {
-    pub fn new(user_id: &str, following_id: Option<String>) -> FollowingFetcher {
+    pub fn new(user_id: &str, following_ids: Option<Vec<String>>) -> FollowingFetcher{
         FollowingFetcher {
             user_id: user_id.to_string(), 
-            following_id: following_id,
+            following_ids: following_ids,
         }
     }
 
-    pub fn fetch(&self, conf: &configuration::Config) -> Result<Vec<FollowingUser>, Box<dyn Error>> {
-        let mut latest_recorded_id: Option<String> = None;
+    pub fn fetch(&self, conf: &configuration::Config, conn: &Connection) -> Result<(Vec<FollowingUser>, Vec<BasicUserDetail>), Box<dyn Error>> {
+        let mut latest_records= None;
         if let TaskType::Monitoring = conf.task_type {
-            latest_recorded_id = self.following_id.clone();
+            latest_records = (&self.following_ids).as_ref();
         }
+        let mut latest_record_id: Option<&str> = None;
+        if let Some(latest_record_list) = latest_records {
+            let old_following_num = latest_record_list.len();
+            if old_following_num > 0 {
+                latest_record_id = Some(&latest_record_list[old_following_num-1].as_str());
+            }
+        }
+        
 
         let client = Client::builder().build().expect("error in client builder");
         let query_url = format!("https://api.twitter.com/2/users/{}/following", &self.user_id);
@@ -448,8 +463,11 @@ impl FollowingFetcher {
 
         let mut fetched_list: Vec<FollowingUser> = Vec::new();
         let mut related_users: Vec<BasicUserDetail> = Vec::new(); 
+        let mut current_following_ids: Vec<String> = Vec::new();
         let mut page_token: Option<String> = None;
-
+        
+        let mut existing_following = false;
+        let mut req_num = 0;
         'over_pages: loop {
             let mut request_cloned = request.try_clone().expect("Should be able to clone request");
             if let Some(next_token) = &page_token {
@@ -463,38 +481,45 @@ impl FollowingFetcher {
             match data_list {
                 Value::Array(following_list) => {
                     for following_user_raw in following_list {
-                        let mut following_entity = FollowingUser::record(&conf.task_type);
+                        let mut following_entity = FollowingUser::record(&conf.task_type, &self.user_id);
 
                         let following_id = match &following_user_raw["id"] {
                             Value::String(id) => id.to_string(), 
                             _ => { return Err(Box::new(InvalidUserField::new("id"))); }
                         };
-                        if let Some(latest_id) = &latest_recorded_id {
-                            if latest_id.as_str() == following_id {
-                                break 'over_pages;
+                        current_following_ids.push(following_id.clone());
+
+                        if !existing_following  {
+                            if let Some(latest_id) = latest_record_id {
+                                if latest_id == following_id.as_str() {
+                                    existing_following = true;
+                                }
                             }
                         }
+                    
 
-                        let following_username = match &following_user_raw["username"] {
-                            Value::String(username) => username.to_string(), 
-                            _ => { return Err(Box::new(InvalidUserField::new("username"))); }
-                        };
-
-                        let following_name = match &following_user_raw["name"] {
-                            Value::String(name) => name.to_string(), 
-                            _ => { return Err(Box::new(InvalidUserField::new("name"))); }
-                        };
-
-                        let following_user_detail = BasicUserDetail {
-                            id: following_id, 
-                            username: following_username, 
-                            name: following_name,
-                        };
-
-                        following_entity.user = following_user_detail.clone();
-
-                        fetched_list.push(following_entity);
-                        related_users.push(following_user_detail);
+                        if !existing_following {
+                            let following_username = match &following_user_raw["username"] {
+                                Value::String(username) => username.to_string(), 
+                                _ => { return Err(Box::new(InvalidUserField::new("username"))); }
+                            };
+    
+                            let following_name = match &following_user_raw["name"] {
+                                Value::String(name) => name.to_string(), 
+                                _ => { return Err(Box::new(InvalidUserField::new("name"))); }
+                            };
+    
+                            let following_user_detail = BasicUserDetail {
+                                id: following_id, 
+                                username: following_username, 
+                                name: following_name,
+                            };
+    
+                            following_entity.followed_user = following_user_detail.clone();
+    
+                            fetched_list.push(following_entity);
+                            related_users.push(following_user_detail);
+                        }
                     }
                 }
                 _ => {
@@ -510,15 +535,31 @@ impl FollowingFetcher {
 
             page_token = match &response_parsed["meta"]["next_token"] {
                 Value::String(token) => {
-                    thread::sleep(time::Duration::from_secs(60));
+                    req_num += 1;
+                    if req_num % 3 == 0 {
+                        thread::sleep(time::Duration::from_secs(180));
+                    }
                     Some(token.clone())
                 }, 
                 _ => { break 'over_pages; }
             };
         }
 
+        let current_following_set: HashSet<&String> = current_following_ids.iter().collect();
+        let mut prev_following_set: HashSet<&String> = HashSet::new();
+        if let Some(prev_following) = latest_records {
+            prev_following_set = prev_following.into_iter().collect();
+        }
+        for unfollowed_id in prev_following_set.difference(&current_following_set) {
+            let mut unfollowed_entity = FollowingUser::record(&conf.task_type, &self.user_id);
+            unfollowed_entity.action = FollowingAction::Unfollow;
+            unfollowed_entity.followed_user = BasicUserDetail::get_record(conn, unfollowed_id)?;
+            fetched_list.push(unfollowed_entity);
+        }
+
+
         fetched_list.reverse();
-        Ok(fetched_list)
+        Ok((fetched_list, related_users))
     }
 }
 
