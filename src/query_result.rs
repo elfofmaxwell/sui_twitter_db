@@ -55,9 +55,9 @@ impl FetchedUser {
             let latest_records = FetchedUser::get_records(conn, &self.user.username, Some(1), 0)?;
             let latest_record = latest_records.get(0).expect("Should have 1 user record");
 
-            println!("latest condition {:#?}", &latest_record);
-            println!("new record {:#?}", self);
-            if dbg!(latest_record.user == self.user) {
+            //println!("latest condition {:#?}", &latest_record);
+            //println!("new record {:#?}", self);
+            if latest_record.user == self.user {
                 return Ok(());
             }
         }
@@ -191,7 +191,7 @@ impl IdMarked for BasicTweet {
 
 impl BasicTweet {
     pub fn write_to_db(&self, conn: &Connection) -> Result<(), Box<dyn Error>> {
-        let check_exist: rusqlite::Result<Option<String>> = conn.query_row(
+        let check_exist: rusqlite::Result<Option<i32>> = conn.query_row(
             "SELECT id FROM tweet_dict WHERE tweet_id = ?", 
             [&self.id], 
             |row| {
@@ -205,9 +205,7 @@ impl BasicTweet {
                 let mut tweet_dict_stmt = conn.prepare(
                     "INSERT INTO tweet_dict 
                     (tweet_id, author_id, text) 
-                    VALUES (:tweet_id, :author_id, :text) 
-                    ON CONFLICT (tweet_id) DO UPDATE 
-                    SET author_id = :new_author_id, text = :new_text"
+                    VALUES (:tweet_id, :author_id, :text)"
                 )?;
         
                 tweet_dict_stmt.execute(
@@ -215,8 +213,6 @@ impl BasicTweet {
                         ":tweet_id": &self.id, 
                         ":author_id": &self.author_id, 
                         ":text": &self.text, 
-                        ":new_author_id": &self.author_id,
-                        ":new_text": &self.text
                     }
                 )?;
 
@@ -543,10 +539,10 @@ impl LikedTweet {
 
     pub fn newest_id(conn: &Connection, user_id: &str) -> Result<Option<String>, Box<dyn Error>> {
         let newest_id: Option<String> = conn.query_row(
-            "SELECT tweet_id FROM user_liked WHERE user_id = ? ORDER BY id DESC LIMIT 1", 
+            "SELECT ref_tweet_id FROM user_liked WHERE user_id = ? ORDER BY id DESC LIMIT 1", 
             [user_id, ], 
             |row| {
-                row.get(4)
+                row.get(0)
             }
         ).optional()?;
         Ok(newest_id)
@@ -670,6 +666,20 @@ impl FollowingUser {
         Ok(newest_id)
     }
 
+    pub fn get_newest_ids(conn: &Connection,  user_id: &str) -> Result<Vec<String>, Box<dyn Error>> {
+        let query_map = |row: &rusqlite::Row| -> rusqlite::Result<String> {
+            Ok(row.get(3)?)
+        };
+
+        let mut queried_following_vec: Vec<String> = Vec::new();
+        let mut user_following_stmt = conn.prepare("SELECT * FROM user_current_following WHERE user_id = ? ORDER BY id DESC")?;
+        let query_results = user_following_stmt.query_map(params![user_id], query_map)?;
+        for query_result in query_results {
+            queried_following_vec.push(query_result?);
+        }
+        Ok(queried_following_vec)
+    }
+
     pub fn get_records(conn: &Connection,  user_id: &str, max_results: Option<u16>, offset: u16) -> Result<Vec<FollowingUser>, Box<dyn Error>> {
         let query_map = |row: &rusqlite::Row| -> rusqlite::Result<(Option<String>, String, String)> {
             Ok((row.get(1)?, row.get(3)?, row.get(4)?))
@@ -723,19 +733,50 @@ impl FollowingUser {
             VALUES (:time, :user_id, :following_user_id, :action)"
         )?;
 
+        let mut user_current_following_stmt = conn.prepare(
+            "INSERT INTO user_current_following
+            (time, user_id, following_user_id, action)
+            VALUES (:time, :user_id, :following_user_id, :action)"
+        )?;
+
+        let mut remove_following_stmt = conn.prepare(
+            "DELETE FROM user_current_following WHERE user_id = :user_id AND following_user_id = :following_user_id"
+        )?;
+
         let action_str = match &self.action {
             FollowingAction::Follow => "follow", 
             FollowingAction::Unfollow => "unfollow"
         };
 
-        user_following_stmt.execute(
-            named_params! {
-                ":time": &self.recorded_time, 
-                ":user_id": &self.user_id, 
-                ":following_user_id": &self.followed_user.id, 
-                ":action": action_str
+        match &self.action {
+            FollowingAction::Follow => {
+                user_following_stmt.execute(
+                    named_params! {
+                        ":time": &self.recorded_time, 
+                        ":user_id": &self.user_id, 
+                        ":following_user_id": &self.followed_user.id, 
+                        ":action": action_str
+                    }
+                )?;
+                user_current_following_stmt.execute(
+                    named_params! {
+                        ":time": &self.recorded_time, 
+                        ":user_id": &self.user_id, 
+                        ":following_user_id": &self.followed_user.id, 
+                        ":action": action_str
+                    }
+                )?;
             }
-        )?;
+            FollowingAction::Unfollow => {
+                remove_following_stmt.execute(
+                    named_params! {
+                        ":user_id": &self.user_id, 
+                        ":following_user_id": &self.followed_user.id
+                    }
+                )?;
+            }
+        }
+
         Ok(())
     }
 }
@@ -768,6 +809,7 @@ mod tests {
         let found_user = find_by_id(target, &user_dict);
         assert_eq!(&found_user.unwrap().name, "zyxw");
     }
+
 
     #[test]
     fn test_db_write_and_get() {

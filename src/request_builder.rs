@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::{collections::HashMap};
 use std::error::Error;
 use std::{thread, time};
 use reqwest::{blocking::{Client}};
@@ -13,49 +12,27 @@ use crate::query_result::{self, UserDetail, LikedTweet, FollowingUser, FetchedUs
 use crate::query_result::{FetchedTweet, BasicUserDetail, TweetType, BasicTweet};
 use crate::{configuration};
 
-pub trait RequestParams {
-    fn to_hashmap(&self) -> HashMap<String, String>;
-    fn get_base_url(&self) -> String;
-    fn get_method(&self) -> RequestMethod;
-}
-
 pub enum RequestMethod {
     Get, 
     Post,
 }
 
 pub struct UserInfoFetcher {
-    user_id: String, 
-}
-
-impl RequestParams for UserInfoFetcher {
-    fn get_base_url(&self) -> String {
-        "https://api.twitter.com/2/users/by".to_string()
-    }
-
-    fn get_method(&self) -> RequestMethod {
-        RequestMethod::Get
-    }
-
-    fn to_hashmap(&self) -> HashMap<String, String> {
-        HashMap::from([
-            ("user.fields".to_string(), "description,location".to_string())
-        ])
-    }
+    username: String, 
 }
 
 impl UserInfoFetcher {
-    pub fn new(user_id: &str) -> UserInfoFetcher {
-        UserInfoFetcher { user_id: user_id.to_string() }
+    pub fn new(username: &str) -> UserInfoFetcher {
+        UserInfoFetcher { username: username.to_string() }
     }
 
     pub fn fetch(&self, conf: &configuration::Config) -> Result<FetchedUser, Box<dyn Error>> {
         let client = Client::builder().build().expect("error in client builder");
         let request = 
             client
-            .get(&self.get_base_url())
+            .get("https://api.twitter.com/2/users/by")
             .query(&[
-                ("usernames".to_string(), self.user_id.clone()), 
+                ("usernames".to_string(), self.username.clone()), 
                 ("user.fields".to_string(), "description,location".to_string())]
             ).header(
                 "Authorization", 
@@ -150,7 +127,6 @@ impl TweetFetcher {
             None => ()
         }
 
-    
         let mut fetched_list: Vec<FetchedTweet> = Vec::new();
         let mut related_users: Vec<BasicUserDetail> = Vec::new(); 
         let mut related_tweets: Vec<BasicTweet> = Vec::new();
@@ -164,20 +140,20 @@ impl TweetFetcher {
             let response = request_cloned.send()?.text()?;
             let response_parsed: serde_json::Value = serde_json::from_str(&response)?;
 
-            let mut related_user_in_page = collect_include_users(&response_parsed["includes"]["users"])?;
-            related_users.append(&mut related_user_in_page);
-
-            let related_tweet_raw = &response_parsed["includes"]["tweets"];
-            if let Value::Array(related_tweet_list) = related_tweet_raw {
-                for tweet_raw in related_tweet_list {
-                    let related_tweet_item = parse_related_tweet(tweet_raw)?;
-                    related_tweets.push(related_tweet_item);
-                }
-            }
-
             let data_list = &response_parsed["data"];
             match data_list {
                 Value::Array(tweet_list) => {
+                    let mut related_user_in_page = collect_include_users(&response_parsed["includes"]["users"])?;
+                    related_users.append(&mut related_user_in_page);
+        
+                    let related_tweet_raw = &response_parsed["includes"]["tweets"];
+                    if let Value::Array(related_tweet_list) = related_tweet_raw {
+                        for tweet_raw in related_tweet_list {
+                            let related_tweet_item = parse_related_tweet(tweet_raw)?;
+                            related_tweets.push(related_tweet_item);
+                        }
+                    }
+
                     for tweet_item_raw in tweet_list {
                         let mut tweet_item = FetchedTweet::new();
 
@@ -375,11 +351,10 @@ impl LikeFetcher {
             
             let data_list = &response_parsed["data"];
             
-            let mut related_user_in_page = collect_include_users(&response_parsed["includes"]["users"])?;
-            related_users.append(&mut related_user_in_page);
-    
             match data_list {
                 Value::Array(liked_list) => {
+                    let mut related_user_in_page = collect_include_users(&response_parsed["includes"]["users"])?;
+                    related_users.append(&mut related_user_in_page);
                     for liked_tweet_raw in liked_list {
                         let mut liked_tweet_item = LikedTweet::record(&conf.task_type, &self.user_id);
                         let related_tweet_item = parse_related_tweet(liked_tweet_raw)?;
@@ -414,7 +389,7 @@ impl LikeFetcher {
 
             page_token = match &response_parsed["meta"]["next_token"] {
                 Value::String(token) => {
-                    thread::sleep(time::Duration::from_secs(12));
+                    thread::sleep(time::Duration::from_secs(13));
                     Some(token.clone())
                 }, 
                 _ => { break 'over_pages; }
@@ -426,6 +401,7 @@ impl LikeFetcher {
         Ok((fetched_list, related_tweets, related_users))
     }
 }
+
 
 pub struct FollowingFetcher{
     user_id: String, 
@@ -449,7 +425,7 @@ impl FollowingFetcher {
         if let Some(latest_record_list) = latest_records {
             let old_following_num = latest_record_list.len();
             if old_following_num > 0 {
-                latest_record_id = Some(&latest_record_list[old_following_num-1].as_str());
+                latest_record_id = Some(&latest_record_list[0].as_str());
             }
         }
         
@@ -563,6 +539,7 @@ impl FollowingFetcher {
     }
 }
 
+
 fn collect_include_users(include_users_raw: &Value) -> Result<Vec<BasicUserDetail>, Box<dyn Error>> {
     let mut related_users: Vec<BasicUserDetail> = Vec::new();
     if let Value::Array(related_user_list) = include_users_raw {
@@ -592,6 +569,7 @@ fn collect_include_users(include_users_raw: &Value) -> Result<Vec<BasicUserDetai
 
     Ok(related_users)
 }
+
 
 fn parse_related_tweet(single_tweet_raw: &Value) -> Result<BasicTweet, Box<dyn Error>> {
     let mut related_tweet_item = BasicTweet {

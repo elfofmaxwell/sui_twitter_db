@@ -21,7 +21,7 @@ struct FileConfig {
 }
 
 /// `Config` structure saving configurations required for running
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Config {
     pub conf_path: String, 
     pub oauth_consumer_key: String, 
