@@ -11,10 +11,6 @@ pub enum TaskType {
 /// `FileConfig` structure saving configurations from config file
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct FileConfig {
-    oauth_consumer_key: String, 
-    oauth_consumer_secret: String, 
-    oauth_token: String, 
-    oauth_token_secret: String, 
     bearer_token: String,
     monitoring_username: Vec<String>, 
     db_path: String,
@@ -24,10 +20,6 @@ struct FileConfig {
 #[derive(PartialEq, Debug, Clone)]
 pub struct Config {
     pub conf_path: String, 
-    pub oauth_consumer_key: String, 
-    pub oauth_consumer_secret: String, 
-    pub oauth_token: String, 
-    pub oauth_token_secret: String, 
     pub bearer_token: String,
     pub monitoring_username: Vec<String>, 
     pub db_path: String,
@@ -55,10 +47,6 @@ impl Config {
         let conf_file_options: FileConfig = serde_yaml::from_str(&conf_yaml_str)?;
         Ok(Config {
             conf_path: String::from(conf_path), 
-            oauth_consumer_key: conf_file_options.oauth_consumer_key, 
-            oauth_consumer_secret: conf_file_options.oauth_consumer_secret,
-            oauth_token: conf_file_options.oauth_token, 
-            oauth_token_secret: conf_file_options.oauth_token_secret, 
             bearer_token: conf_file_options.bearer_token,
             monitoring_username: conf_file_options.monitoring_username, 
             db_path: conf_file_options.db_path,
@@ -96,10 +84,6 @@ mod tests {
 
         let target_conf = Config {
             conf_path: String::from(conf_path), 
-            oauth_consumer_key: String::from("xvz1evFS4wEEPTGEFPHBog"),
-            oauth_consumer_secret: String::from("kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw"),
-            oauth_token: String::from("370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb"),
-            oauth_token_secret: String::from("LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE"),
             bearer_token: String::from("aaaabbbb"),
             db_path: String::from("./sui.db"), 
             monitoring_username: vec![String::from("@suisei"), String::from("@miko")],
