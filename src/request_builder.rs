@@ -205,7 +205,7 @@ impl TweetFetcher {
                                 &related_tweed_detail.author_id, 
                                 &related_users).cloned().unwrap_or(
                                     BasicUserDetail { 
-                                        id: "".to_string(), 
+                                        id: (&related_tweed_detail.author_id).to_string(), 
                                         username: "".to_string(), 
                                         name: "".to_string() 
                                     }
