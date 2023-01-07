@@ -8,12 +8,23 @@ pub enum TaskType {
     Monitoring
 }
 
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+pub struct NotificationOptions {
+    pub profile: bool, 
+    pub tweets: bool, 
+    pub likes: bool,
+    pub follows: bool
+}
+
 /// `FileConfig` structure saving configurations from config file
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct FileConfig {
     bearer_token: String,
     monitoring_username: Vec<String>, 
     db_path: String,
+    bot_token: String, 
+    chat_id: Vec<String>,
+    notification: NotificationOptions
 }
 
 /// `Config` structure saving configurations required for running
@@ -23,6 +34,9 @@ pub struct Config {
     pub bearer_token: String,
     pub monitoring_username: Vec<String>, 
     pub db_path: String,
+    pub bot_token: String, 
+    pub chat_id: Vec<String>,
+    pub notification: NotificationOptions,
     pub verbose: bool, 
     pub task_type: TaskType
 }
@@ -50,6 +64,9 @@ impl Config {
             bearer_token: conf_file_options.bearer_token,
             monitoring_username: conf_file_options.monitoring_username, 
             db_path: conf_file_options.db_path,
+            bot_token: conf_file_options.bot_token, 
+            chat_id: conf_file_options.chat_id,
+            notification: conf_file_options.notification,
             verbose: verbose,
             task_type: task_type.clone()
         })
@@ -86,7 +103,10 @@ mod tests {
             conf_path: String::from(conf_path), 
             bearer_token: String::from("aaaabbbb"),
             db_path: String::from("./sui.db"), 
+            bot_token: String::from("1234"), 
+            chat_id: vec!["9876".to_string()],
             monitoring_username: vec![String::from("@suisei"), String::from("@miko")],
+            notification: NotificationOptions { profile: false, tweets: true, likes: true, follows: true },
             verbose: verbose,
             task_type: TaskType::Monitoring
         };

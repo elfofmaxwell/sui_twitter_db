@@ -4,10 +4,21 @@ use rusqlite::{Connection, named_params, OptionalExtension, params};
 use serde::{Serialize, Deserialize};
 use chrono::prelude::*;
 
-use crate::configuration::TaskType;
+use crate::{configuration::{TaskType, Config}, notification};
 
 pub trait IdMarked {
     fn get_id(&self) -> &String;
+}
+
+#[derive(Serialize, Debug)]
+pub struct TelegramMsg {
+    pub chat_id: String, 
+    pub text: String, 
+    pub parse_mode: String, 
+}
+
+pub trait ToTelegramMsg {
+    fn tg_msg(&self, conf: &Config, conn: &Connection) -> Result<Vec<TelegramMsg>, Box<dyn Error>>;
 }
 
 #[derive(Debug, PartialEq)]
@@ -44,7 +55,7 @@ impl FetchedUser {
         }
     }
 
-    pub fn write_to_db(&self, conn: &Connection, task_type: &TaskType) -> Result<(), Box<dyn Error>> {
+    pub fn write_to_db(&self, conn: &Connection, task_type: &TaskType) -> Result<bool, Box<dyn Error>> {
         let mut stmt = conn.prepare(
             "INSERT INTO user_profile 
             (time, user_id, username, name, location, description)
@@ -58,7 +69,7 @@ impl FetchedUser {
             //println!("latest condition {:#?}", &latest_record);
             //println!("new record {:#?}", self);
             if latest_record.user == self.user {
-                return Ok(());
+                return Ok(false);
             }
         }
 
@@ -71,7 +82,7 @@ impl FetchedUser {
             ":description": &self.user.description,
         })?;
 
-        Ok(())
+        Ok(true)
     }
 
     pub fn get_records(conn: &Connection, username: &str, max_results: Option<u16>, offset: u16) -> Result<Vec<FetchedUser>, rusqlite::Error> {
@@ -110,6 +121,39 @@ impl FetchedUser {
     }
 }
 
+impl ToTelegramMsg for FetchedUser {
+    fn tg_msg(&self, conf: &Config, conn: &Connection) -> Result<Vec<TelegramMsg>, Box<dyn Error>> {
+        let profile_url = notification::tg_escape(format!("https://twitter.com/{}", &self.user.username).as_str());
+        let user_identify_str = format!("*{}* (@{}) updates his/her profile: ", notification::tg_escape(&self.user.name), notification::tg_escape(&self.user.username));
+        let new_profile_str = format!(
+            "- *Name*: {}
+- *Description*: {}
+- *Location*: {}", 
+            notification::tg_escape(&self.user.name), 
+            match &self.user.description {
+                Some(description) => notification::tg_escape(&description), 
+                None => "_Not set_".to_string()
+            }, 
+            match &self.user.location {
+                Some(location) => notification::tg_escape(&location), 
+                None => "_Not set_".to_string()
+            }, 
+        );
+
+        let text = format!(
+            "{profile_url}
+{user_identify_str}
+{new_profile_str}"
+        );
+        let mut tg_msg_vec = Vec::new();
+        for chat_id in &conf.chat_id {
+            tg_msg_vec.push(TelegramMsg { chat_id: String::from(chat_id), text: text.clone(), parse_mode: "Markdown".to_string() })
+        }
+        Ok(
+            tg_msg_vec
+        )
+    }
+}
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct UserDetail {
     pub id: String, 
@@ -496,6 +540,33 @@ impl FetchedTweet {
     }
 }
 
+impl ToTelegramMsg for FetchedTweet {
+    fn tg_msg(&self, conf: &Config, conn: &Connection) -> Result<Vec<TelegramMsg>, Box<dyn Error>> {
+        let tweet_type = match &self.tweet_type {
+            TweetType::Tweet => "tweets".to_string(), 
+            TweetType::Reply { tweet: _, author } => format!("replies to [{}]({})", author.name, format!("vxtwitter.com/{}", author.username)), 
+            TweetType::Retweet { tweet: _, author } => format!("retweets from [{}]({})", author.name, format!("vxtwitter.com/{}", author.username))
+        };
+        let author = BasicUserDetail::get_record(conn, &self.author_id)?;
+        let name = notification::tg_escape(&author.name);
+        let username = &author.username;
+        let tweet_text: String = notification::tg_escape(&self.text);
+        let cvx_url = notification::tg_escape(format!("https://vxtwitter.com/{}/status/{}", username, &self.id).as_str());
+        let text = format!(
+            "{cvx_url}
+*{name}* {tweet_type}: 
+{tweet_text}"
+        );
+        let mut tg_msg_vec = Vec::new();
+        for chat_id in &conf.chat_id {
+            tg_msg_vec.push(TelegramMsg { chat_id: String::from(chat_id), text: text.clone(), parse_mode: "Markdown".to_string() })
+        }
+        Ok(
+            tg_msg_vec
+        )
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct LikedTweet {
     pub recorded_time: Option<String>, 
@@ -610,6 +681,27 @@ impl LikedTweet {
         )?;
 
         Ok(())
+    }
+}
+
+impl ToTelegramMsg for LikedTweet {
+    fn tg_msg(&self, conf: &Config, conn: &Connection) -> Result<Vec<TelegramMsg>, Box<dyn Error>> {
+        let user = BasicUserDetail::get_record(conn, &self.user_id)?;
+        let name = notification::tg_escape(&user.name);
+        let tweet_text = notification::tg_escape(&self.tweet.text);
+        let cvx_url = notification::tg_escape(format!("https://vxtwitter.com/{}/status/{}", &self.author.username, &self.tweet.id).as_str());
+        let text = format!(
+            "{cvx_url}
+*{name}* likes: 
+{tweet_text}"
+        );
+        let mut tg_msg_vec = Vec::new();
+        for chat_id in &conf.chat_id {
+            tg_msg_vec.push(TelegramMsg { chat_id: String::from(chat_id), text: text.clone(), parse_mode: "Markdown".to_string() })
+        }
+        Ok(
+            tg_msg_vec
+        )
     }
 }
 
@@ -778,6 +870,33 @@ impl FollowingUser {
         }
 
         Ok(())
+    }
+}
+
+impl ToTelegramMsg for FollowingUser {
+    fn tg_msg(&self, conf: &Config, conn: &Connection) -> Result<Vec<TelegramMsg>, Box<dyn Error>> {
+        let action_str = match &self.action {
+            FollowingAction::Follow => "now following",
+            FollowingAction::Unfollow => "unfollowed"
+        };
+
+        let user = BasicUserDetail::get_record(conn, &self.user_id)?;
+        let name = notification::tg_escape(&user.name);
+        let profile_url = notification::tg_escape(format!("https://twitter.com/{}", &self.followed_user.username).as_str());
+        let followed_user_str = format!("[{}](https://twitter.com/{}) (@{})", &self.followed_user.name, &self.followed_user.username, notification::tg_escape(&self.followed_user.username));
+
+        let text = format!(
+            "{profile_url}
+*{name}* {action_str}: 
+{followed_user_str}"
+        );
+        let mut tg_msg_vec = Vec::new();
+        for chat_id in &conf.chat_id {
+            tg_msg_vec.push(TelegramMsg { chat_id: String::from(chat_id), text: text.clone(), parse_mode: "Markdown".to_string() })
+        }
+        Ok(
+            tg_msg_vec
+        )
     }
 }
 

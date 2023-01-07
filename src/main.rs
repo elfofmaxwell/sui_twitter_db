@@ -1,7 +1,7 @@
 use std::{process, thread, time, sync::Arc};
 use clap::Parser;
 use rusqlite::Connection;
-use sui_twitter_db::{configuration::{Config, Args, TaskType}, request_builder::{UserInfoFetcher, TweetFetcher, LikeFetcher, FollowingFetcher}, db, query_result::{FetchedUser, FetchedTweet, LikedTweet, FollowingUser}};
+use sui_twitter_db::{configuration::{Config, Args, TaskType}, request_builder::{UserInfoFetcher, TweetFetcher, LikeFetcher, FollowingFetcher}, db, query_result::{FetchedUser, FetchedTweet, LikedTweet, FollowingUser}, notification};
 
 fn main() {
     env_logger::init();
@@ -92,12 +92,24 @@ fn main() {
                     
                     loop {
                         let user_profile_fetcher = UserInfoFetcher::new(&profile_username);
-                        let fetched_profile = user_profile_fetcher.fetch(&user_profile_config).expect("Failed to fetch user profile");
-                        log::info!(
-                            "{}: get user profile => user-id: {}, user_name: {}, name: {}", 
-                            &profile_username, &fetched_profile.user.id, &fetched_profile.user.username, &fetched_profile.user.name
-                        );
-                        fetched_profile.write_to_db(&conn, &TaskType::Monitoring).expect("Failed to write user profile to database");
+                        let fetched_profile = match user_profile_fetcher.fetch(&user_profile_config) {
+                            Ok(fetched_profile) => fetched_profile, 
+                            Err(e) => {
+                                log::error!("Unable to fetch user profile: {e}");
+                                thread::sleep(time::Duration::from_secs(120));
+                                continue;
+                            }
+                        };
+                        let update_profile = fetched_profile.write_to_db(&conn, &TaskType::Monitoring).expect("Failed to write user profile to database");
+                        if update_profile {
+                            log::info!(
+                                "{}: get user profile => user-id: {}, user_name: {}, name: {}", 
+                                &profile_username, &fetched_profile.user.id, &fetched_profile.user.username, &fetched_profile.user.name
+                            );
+                            if user_profile_config.notification.profile {
+                                notification::send_tg(&fetched_profile, &user_profile_config, &conn).unwrap_or_else(|e| { log::error!("Failed to send updated profile to telegram: {}", e) });
+                            }
+                        }
                         thread::sleep(time::Duration::from_secs(120));
                     }
 
@@ -109,7 +121,14 @@ fn main() {
                     loop {
                         let latest_tweet_id = FetchedTweet::newest_id(&conn, &tweet_user_id).expect("should get latest id record");
                         let tweet_fetcher = TweetFetcher::new(&tweet_user_id, latest_tweet_id.as_deref());
-                        let (tweets, ref_tweets, ref_users) = tweet_fetcher.fetch(&user_tweet_config).expect("Failed to fetch user tweets");
+                        let (tweets, ref_tweets, ref_users) = match tweet_fetcher.fetch(&user_tweet_config) {
+                            Ok(res) => res, 
+                            Err(e) => {
+                                log::error!("Failed to fetch user tweets: {e}");
+                                thread::sleep(time::Duration::from_secs(60));
+                                continue;
+                            }
+                        };
                         for ref_user in ref_users.into_iter() {
                             ref_user.write_to_db(&conn).expect("Failed to write referenced users to database");
                         }
@@ -122,6 +141,9 @@ fn main() {
                                 &tweet_username, &tweet.text, &tweet.tweet_type, &tweet.created_at
                             );
                             tweet.write_to_db(&conn).expect("Failed to write fetched tweet to database");
+                            if user_tweet_config.notification.tweets {
+                                notification::send_tg(&tweet, &user_tweet_config, &conn).unwrap_or_else(|e| { log::error!("Failed to send new tweet to telegram: {}", e) });
+                            }
                         }
                         thread::sleep(time::Duration::from_secs(60));
                     }
@@ -134,7 +156,14 @@ fn main() {
                     loop {
                         let latest_like_id = LikedTweet::newest_id(&conn, &like_user_id).expect("should get liked id record");
                         let like_fetcher = LikeFetcher::new(&like_user_id, latest_like_id.as_deref());
-                        let (liked_tweet_records, liked_tweets, liked_users) = like_fetcher.fetch(&user_like_config).expect("Failed to fetch liked twitter");
+                        let (liked_tweet_records, liked_tweets, liked_users) = match like_fetcher.fetch(&user_like_config) {
+                            Ok(res) => res, 
+                            Err(e) => {
+                                log::error!("Failed to fetch liked twitter: {e}"); 
+                                thread::sleep(time::Duration::from_secs(60));
+                                continue;
+                            }
+                        };
                         for liked_user in liked_users.into_iter() {
                             liked_user.write_to_db(&conn).expect("Failed to write liked users to database");
                         }
@@ -147,6 +176,9 @@ fn main() {
                                 &like_username, &liked_tweet_record.tweet.text, &liked_tweet_record.author.username
                             );
                             liked_tweet_record.write_to_db(&conn).expect("Failed to write liked tweet record to database");
+                            if user_like_config.notification.likes {
+                                notification::send_tg(&liked_tweet_record, &user_like_config, &conn).unwrap_or_else(|e| { log::error!("Failed to send new likes to telegram: {}", e) });
+                            }
                         }
                         thread::sleep(time::Duration::from_secs(60));
                     }
@@ -158,7 +190,14 @@ fn main() {
                     loop {
                         let latest_follow_id = FollowingUser::get_newest_ids(&conn, &following_user_id).expect("should get liked id record");
                         let following_fetcher = FollowingFetcher::new(&following_user_id, Some(latest_follow_id));
-                        let (following_records, followed_users) = following_fetcher.fetch(&user_following_config, &conn).expect("Failed to fetch following users");
+                        let (following_records, followed_users) = match following_fetcher.fetch(&user_following_config, &conn) {
+                            Ok(res) => res, 
+                            Err(e) => {
+                                log::error!("Failed to fetch following users: {e}");
+                                thread::sleep(time::Duration::from_secs(180));
+                                continue;
+                            }
+                        };
                         for followed_user in followed_users.into_iter() {
                             followed_user.write_to_db(&conn).expect("Failed to write followed users to database");
                         }
@@ -167,6 +206,14 @@ fn main() {
                                 "{}: get new following action => username: {}, action: {:?}", 
                                 &following_username, &following_record.followed_user.username, &following_record.action
                             );
+                            if user_following_config.notification.follows {
+                                notification::send_tg(&following_record, &user_following_config, &conn).unwrap_or_else(
+                                    |e| {
+                                        log::error!("Failed to send new following action to telegram: {e}");
+                                    }
+                                );
+                            }
+
                             following_record.write_to_db(&conn).expect("Failed to write following records to database");
                         }
                         thread::sleep(time::Duration::from_secs(180));

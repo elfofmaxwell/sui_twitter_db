@@ -1,3 +1,10 @@
 bearer_token: "aaaabbbb"
 db_path: "./sui.db"
 monitoring_username: ["@suisei", "@miko"]
+bot_token: "1234"
+chat_id: ["9876"]
+notification: 
+  profile: false
+  tweets: true
+  likes: true
+  follows: true
