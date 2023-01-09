@@ -512,8 +512,8 @@ impl FollowingFetcher {
             page_token = match &response_parsed["meta"]["next_token"] {
                 Value::String(token) => {
                     req_num += 1;
-                    if req_num % 3 == 0 {
-                        thread::sleep(time::Duration::from_secs(180));
+                    if req_num % 2 == 0 {
+                        thread::sleep(time::Duration::from_secs(120));
                     }
                     Some(token.clone())
                 }, 

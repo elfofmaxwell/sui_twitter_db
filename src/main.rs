@@ -96,7 +96,7 @@ fn main() {
                             Ok(fetched_profile) => fetched_profile, 
                             Err(e) => {
                                 log::error!("Unable to fetch user profile: {e}");
-                                thread::sleep(time::Duration::from_secs(120));
+                                thread::sleep(time::Duration::from_secs(60));
                                 continue;
                             }
                         };
@@ -110,7 +110,7 @@ fn main() {
                                 notification::send_tg(&fetched_profile, &user_profile_config, &conn).unwrap_or_else(|e| { log::error!("Failed to send updated profile to telegram: {}", e) });
                             }
                         }
-                        thread::sleep(time::Duration::from_secs(120));
+                        thread::sleep(time::Duration::from_secs(60));
                     }
 
                 });
@@ -125,7 +125,7 @@ fn main() {
                             Ok(res) => res, 
                             Err(e) => {
                                 log::error!("Failed to fetch user tweets: {e}");
-                                thread::sleep(time::Duration::from_secs(60));
+                                thread::sleep(time::Duration::from_secs(30));
                                 continue;
                             }
                         };
@@ -145,7 +145,7 @@ fn main() {
                                 notification::send_tg(&tweet, &user_tweet_config, &conn).unwrap_or_else(|e| { log::error!("Failed to send new tweet to telegram: {}", e) });
                             }
                         }
-                        thread::sleep(time::Duration::from_secs(60));
+                        thread::sleep(time::Duration::from_secs(30));
                     }
 
                 });
@@ -160,7 +160,7 @@ fn main() {
                             Ok(res) => res, 
                             Err(e) => {
                                 log::error!("Failed to fetch liked twitter: {e}"); 
-                                thread::sleep(time::Duration::from_secs(60));
+                                thread::sleep(time::Duration::from_secs(30));
                                 continue;
                             }
                         };
@@ -180,7 +180,7 @@ fn main() {
                                 notification::send_tg(&liked_tweet_record, &user_like_config, &conn).unwrap_or_else(|e| { log::error!("Failed to send new likes to telegram: {}", e) });
                             }
                         }
-                        thread::sleep(time::Duration::from_secs(60));
+                        thread::sleep(time::Duration::from_secs(30));
                     }
                 });
 
@@ -194,7 +194,7 @@ fn main() {
                             Ok(res) => res, 
                             Err(e) => {
                                 log::error!("Failed to fetch following users: {e}");
-                                thread::sleep(time::Duration::from_secs(180));
+                                thread::sleep(time::Duration::from_secs(120));
                                 continue;
                             }
                         };
@@ -216,7 +216,7 @@ fn main() {
 
                             following_record.write_to_db(&conn).expect("Failed to write following records to database");
                         }
-                        thread::sleep(time::Duration::from_secs(180));
+                        thread::sleep(time::Duration::from_secs(120));
                     }
                 });
 

@@ -122,7 +122,7 @@ impl FetchedUser {
 }
 
 impl ToTelegramMsg for FetchedUser {
-    fn tg_msg(&self, conf: &Config, conn: &Connection) -> Result<Vec<TelegramMsg>, Box<dyn Error>> {
+    fn tg_msg(&self, conf: &Config, _conn: &Connection) -> Result<Vec<TelegramMsg>, Box<dyn Error>> {
         let profile_url = notification::tg_escape(format!("https://twitter.com/{}", &self.user.username).as_str());
         let user_identify_str = format!("*{}* (@{}) updates his/her profile: ", notification::tg_escape(&self.user.name), notification::tg_escape(&self.user.username));
         let new_profile_str = format!(
