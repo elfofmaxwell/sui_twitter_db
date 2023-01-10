@@ -444,10 +444,7 @@ impl FollowingFetcher {
         let client = Client::builder().build().expect("error in client builder");
         let query_url = format!("https://api.twitter.com/2/users/{}/following", &self.user_id);
         let request = client.get(&query_url).query(&[
-            ("max_results".to_string(), match conf.task_type {
-                TaskType::Initializing => "1000".to_string(), 
-                TaskType::Monitoring => "2".to_string()
-            }), 
+            ("max_results".to_string(), "1000".to_string()), 
             ("user.fields".to_string(), "id,name,username".to_string())
         ]).header("Authorization", format!("Bearer {}", &conf.bearer_token));
 
