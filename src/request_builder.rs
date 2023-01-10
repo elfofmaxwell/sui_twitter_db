@@ -39,6 +39,7 @@ impl UserInfoFetcher {
                 format!("Bearer {}", &conf.bearer_token)
             );
         let response = request.send()?.text()?;
+        log::debug!("user detail fetched!");
         let raw_user: Value = serde_json::from_str(&response)?;
         let mut user_detail = UserDetail {
             id: String::new(), 
@@ -138,6 +139,7 @@ impl TweetFetcher {
                 request_cloned = request_cloned.query(&[("pagination_token".to_string(), next_token.clone())]);
             }
             let response = request_cloned.send()?.text()?;
+            log::debug!("Tweet fetched!");
             let response_parsed: serde_json::Value = serde_json::from_str(&response)?;
 
             let data_list = &response_parsed["data"];
@@ -347,6 +349,7 @@ impl LikeFetcher {
                 request_cloned = request_cloned.query(&[("pagination_token".to_string(), next_token.clone())]);
             }
             let response = request_cloned.send()?.text()?;
+            log::debug!("liked fetched");
             let response_parsed: serde_json::Value = serde_json::from_str(&response)?;
             
             let data_list = &response_parsed["data"];
@@ -450,6 +453,7 @@ impl FollowingFetcher {
                 request_cloned = request_cloned.query(&[("pagination_token".to_string(), next_token.clone())]);
             }
             let response = request_cloned.send()?.text()?;
+            log::debug!("following fecthed");
             let response_parsed: serde_json::Value = serde_json::from_str(&response)?;
             
             let data_list = &response_parsed["data"];
