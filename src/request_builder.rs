@@ -291,6 +291,7 @@ impl TweetFetcher {
                             break;
                         }
                     } else {
+                        log::error!("Get response: {}", &response);
                         return Err(Box::new(InvalidTweetField::new("data")));
                     }
                 }
@@ -391,6 +392,7 @@ impl LikeFetcher {
                             break 'over_pages;
                         }
                     } else {
+                        log::error!("Get response: {}", &response);
                         return Err(Box::new(InvalidTweetField::new("data")));
                     }
                 }
@@ -517,6 +519,7 @@ impl FollowingFetcher {
                             break 'over_pages;
                         }
                     } else {
+                        log::error!("Get response: {}", &response);
                         return Err(Box::new(InvalidUserField::new("data")));
                     }
                 }
