@@ -116,7 +116,7 @@ impl TweetFetcher {
             ("expansions".to_string(), "referenced_tweets.id.author_id".to_string()), 
             ("max_results".to_string(), match conf.task_type {
                 TaskType::Initializing => "100".to_string(), 
-                TaskType::Monitoring => "2".to_string()
+                TaskType::Monitoring => "5".to_string()
             }), 
             ("tweet.fields".to_string(), "referenced_tweets,entities,created_at".to_string()),
             ("user.fields".to_string(), "id,name,username".to_string())
@@ -339,7 +339,7 @@ impl LikeFetcher {
             ("expansions".to_string(), "author_id".to_string()), 
             ("max_results".to_string(), match conf.task_type {
                 TaskType::Initializing => "100".to_string(), 
-                TaskType::Monitoring => "2".to_string()
+                TaskType::Monitoring => "10".to_string()
             }), 
             ("tweet.fields".to_string(), "id,text,entities".to_string()),
             ("user.fields".to_string(), "id,name,username".to_string())
@@ -446,7 +446,7 @@ impl FollowingFetcher {
         let request = client.get(&query_url).query(&[
             ("max_results".to_string(), match conf.task_type {
                 TaskType::Initializing => "1000".to_string(), 
-                TaskType::Monitoring => "3".to_string()
+                TaskType::Monitoring => "2".to_string()
             }), 
             ("user.fields".to_string(), "id,name,username".to_string())
         ]).header("Authorization", format!("Bearer {}", &conf.bearer_token));
